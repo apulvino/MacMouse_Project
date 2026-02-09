@@ -21,7 +21,7 @@ neg_mgf="neg_ms2_data_1.mgf"
 
 sirius_output="sirius_results"
 mkdir "${sirius_output}"
-
+########### you gotta go make your sirius acct before you can login, headsup.....
 sirius login --user-env SIRIUS_USER \
 --password-env SIRIUS_PASS \
 --request-token-only
