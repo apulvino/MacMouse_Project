@@ -33,9 +33,9 @@ sirius login --user-env SIRIUS_USER \
 ### after this -- results can be cross-referenced to tidymass annotation table or otherwise analyzed independently but complementary to
 ### existing results from tidymass annotation -> FELLA anno enrichment and network results
 
-# running in db free mode for pos and neg scans separate, can cat out files after
-# increasing ppm a bit to more closely reflect settings used in tidymass/xcms peak picking;
-# updating elements considered to include all possible available elements for consideration
+### running in db free mode for pos and neg scans separate, can cat out files after
+###increasing ppm a bit to more closely reflect settings used in tidymass/xcms peak picking;
+##updating elements considered to include all possible available elements for consideration
 sirius --input "${pos_mgf}" --output "${sirius_output}"/PosScans.sirius --log ALL --cores 16 \
 formulas --profile orbitrap --ppm-max 5 --ppm-max-ms2 10 --candidates 15 --elements-considered CHNOPSCl \
 zodiac \
