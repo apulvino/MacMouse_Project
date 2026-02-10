@@ -1,0 +1,1662 @@
+---
+title: "liver RNAseq look"
+output: html_document
+date: "2022-11-21"
+---
+
+
+
+```{r}
+
+library(readr)
+library(stringr)
+#BiocManager::install("DESeq2")
+#BiocManager::install("SummarizedExperiment")
+library(SummarizedExperiment)
+library(DESeq2)
+library(tibble)
+library(tidyr)
+#BiocManager::install("clusterProfiler")
+library(clusterProfiler)
+library(ggplot2)
+library(RColorBrewer)
+library(pheatmap)
+library(glmpca)
+library(reshape2)
+library(tibble)
+ #if(!require(devtools)) install.packages("devtools")
+ #devtools::install_github("kassambara/ggpubr")
+library(ggpubr)
+library(enrichplot)
+#library(AnnotationDbi)
+#BiocManager::install("org.Mm.eg.db")
+library(org.Mm.eg.db)
+library(dplyr)
+# this next i think
+#BiocManager::install("DOSE")
+#BiocManager::install("pathview")
+#if (!require("BiocManager", quietly = TRUE))
+ #   install.packages("BiocManager")
+#
+#BiocManager::install("clusterProfiler")
+#BiocManager::install("org.Mm.eg.db")
+library(DOSE)
+library(pathview)
+#BiocManager::install("biomaRt")
+library(biomaRt)
+library(rbioapi)
+library(purrr)
+library(AnnotationDbi)
+library(ggrepel)
+library(phyloseq)
+library(gridExtra)
+
+```
+
+
+
+## corncob microbe-liver gene correlation
+
+```{r}
+
+############## generate counts
+filenames <- list.files(full.names=TRUE)
+filenames <- grep("readcounts.txt$", filenames, value = TRUE)
+All_files <- lapply(filenames, function(i)
+  read_tsv(i)
+  )
+counts <- All_files %>% 
+  purrr::reduce(left_join, by = "geneID") %>% tibble::column_to_rownames(var = "geneID")
+counts <- counts[!grepl("^_", rownames(counts)), ]
+
+metadata_rna <- read.csv("Liver_Gene_expression_metadata.csv")
+#metadata <- metadata[-14,]
+metadata_rna[26,3] <- "Squirrel_monkey"
+metadata_humac <- metadata_rna %>% filter(Species !="Squirrel_monkey") #metadata_rna[-14,] %>% filter(Species !="Squirrel_monkey")
+metadata_sqmac <- metadata_rna %>% filter(Species !="Human")#metadata_rna[-14,] %>% filter(Species !="Human")
+metadata_sqmac <- metadata_sqmac[-11,]
+metadata_rna$fat <- as.factor(ifelse(metadata_rna$Species == "Macaque", 1, 0))
+#metadata_rna$fat <- as.factor(metadata_rna$fat)
+#metadata_rna$sampleid <- as.factor(metadata_rna$sampleid)
+metadata_rna$renamed_for_phys <- NULL
+
+metadata_rna$sampleid
+metadata_rna$sample_num <- c("sqm12", "sqm14","sqm16","sqm18", "mac8","mac7", "sqm13", "sqm9", "sqm11","sqm10", "sqm15", "mac4", "mac2","mac6","mac3","mac1","mac5","hum22","hum20","hum21","hum26","hum23","hum25","hum24","hum19", "sqm17")
+
+#counts <- counts[,-14]
+counts_humac <- counts[,paste(metadata_humac$sampleid, sep = "")]
+counts_humac <- counts_humac[!grepl("^_", rownames(counts_humac)), ]
+counts_sqmac <- counts[,paste(metadata_sqmac$sampleid, sep = "")]
+counts_sqmac <- counts_sqmac[!grepl("^_", rownames(counts_sqmac)), ]
+
+
+dds <- DESeqDataSetFromMatrix(countData = counts,
+                                 colData = metadata_rna,
+                                 design = ~Species)
+smallestGroupSize <- 8
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+dds <- dds[keep,]
+#dds <- estimateSizeFactors(dds)
+# rlog will estimate size factors as necessary internally  
+rld <- rlog(dds, blind = TRUE)
+sampleDists <- dist(t(assay(rld)))
+
+
+
+theme_bold <- theme(
+  axis.title.x = element_text(size = 44, face = "bold"),
+  axis.title.y = element_text(size = 44,face = "bold"),
+  axis.text.x = element_text(face = "bold", size = 36, color = "black"),
+  axis.text.y = element_text(size = 36,face = "bold", color = "black"),
+  legend.title = element_text(size = 28,face = "bold"),
+  legend.text = element_text(size = 28,face = "bold"),
+  plot.title = element_text(size = 28,face = "bold", hjust = -.5),
+  strip.text = element_text(size = 32,face = "bold"),
+  axis.line = element_line(size = 4.2, color = "black"),
+  (plot.margin = margin(t = 20, r = 20, b = 20, l = 20))
+)
+
+#set label size
+p1sqm.label=12.5
+p1mac.label=12.5
+p1hum.label=12.5
+
+### baby brained dim red plot
+set.seed(123)
+plotPCA(rld, intgroup = c("Species")) + 
+    geom_point(size = 3) +
+  theme_minimal() +
+  geom_point(size = 6, alpha = 0.7, stat = "identity") +
+  stat_ellipse(type = "t", linetype = "solid", size = 1.8) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"),
+        legend.position = "none") + theme_bold +
+  labs( color = "Donor Group\n")+ 
+  annotate("text", x = -10, y = 11, label = "sqm", color = "#666666", fontface="bold", size=p1sqm.label) +
+  annotate("text", x = -2.5, y = -10, label = "mac", color = "#a6761d", fontface= "bold",size=p1mac.label) +
+  annotate("text", x = 10, y = 12.2, label = "hum", color = "#1b9e77",fontface="bold", size=p1hum.label)  +
+  scale_color_manual(values = c(Human="#1b9e77",Macaque="#a6761d",Squirrel_monkey="#666666"))
+
+ggsave("PCA_Bulk_Liver.tiff", width=12.5, height=8, bg="white")
+
+gene_mat <- t(assay(rld))
+###### just so much noise... no padj < 0.3
+#dds <- DESeq(dds)
+#res <- data.frame(results(dds))
+###### for microbe-gene correlation informed PCA; big-brained dim red plot
+meta_df <- as.data.frame(colData(rld))
+id_map <- setNames(meta_df$sample_num, rownames(meta_df))
+rownames(gene_mat) <- id_map[rownames(gene_mat)]
+###### Need to run first 3 blocks of cecal_shotgun.Rmd for this to work
+library(phyloseq)
+psP <- read_rds("psP.Rds")
+microbe_mat <- as(otu_table(psP), "matrix") 
+ microbe_mat <- t(microbe_mat)
+ 
+#if (taxa_are_rows(physeq))  {
+ # microbe_mat <- t(microbe_mat)
+#}
+microbe_mat <- sweep(microbe_mat, 1, rowSums(microbe_mat), FUN = "/")
+
+common_samples <- intersect(rownames(gene_mat), rownames(microbe_mat))
+####final clean-up/double check for evenness (26/all samps from all groups in each mat)
+gene_mat <- gene_mat[common_samples, , drop=FALSE]
+microbe_mat <- microbe_mat[common_samples, , drop=FALSE]
+
+## quickly grabbing gene_mat/microbe_mat for 4n data integration (diablo, mofa2 run)
+gene_matOut <- data.frame(gene_mat)
+gene_matOut$samples <- rownames(gene_matOut)
+write.csv(data.frame(gene_matOut), "4nLiver.csv", row.names = TRUE)
+microbe_matOut <- data.frame(microbe_mat)
+microbe_matOut$samples <- rownames(microbe_matOut)
+getwd()
+write.csv(data.frame(microbe_matOut),"4nMicrobeMat.csv", row.names = TRUE)
+
+##### make correlation. matrix
+cor_mat <- cor(gene_mat, microbe_mat, method = "spearman") 
+##### get group-wise/sample-wise info accessible for plotting
+groups <- colData(rld)$Species
+samples <- rownames(gene_mat)
+cor_df <- as.data.frame(cor_mat) %>%
+  mutate(gene = rownames(cor_mat)) %>%
+  pivot_longer(-gene, names_to = "microbe", values_to = "correlation")
+#### get top n variable genes for plotting
+top_genes <- rownames(cor_mat)[order(apply(abs(cor_mat), 1, max), decreasing = TRUE)][1:500]
+#### make the subset of the top n genes for plotting
+subset_expr <- t(assay(rld)[top_genes, ])
+### prepare for PCA
+pca_res <- prcomp(subset_expr, scale. = TRUE)
+pca_df <- as.data.frame(pca_res$x)
+pca_df$group <- colData(rld)[rownames(pca_df), "Species"]
+pca_var <- pca_res$sdev^2
+pca_var_explained <- round(100 * pca_var / sum(pca_var), 1)
+### plot
+p2sqm.label=12.5
+p2mac.label=12.5
+p2hum.label=12.5
+
+set.seed(123)
+ggplot(pca_df, aes(PC1, PC2, color = group)) +
+  geom_point(size = 3) +
+  geom_point(size = 6, alpha = 0.7, stat = "identity") +
+  stat_ellipse(type = "t", linetype = "solid", size = 2.4) +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(),
+    panel.background = element_blank(), 
+    axis.line = element_line(colour = "black"),
+    legend.position = "none"
+  ) + theme_bold +
+  labs(
+    title = "", 
+    color = "Donor Group\n",
+    x = paste0("PC1 (", pca_var_explained[1], "% variance)"),
+    y = paste0("PC2 (", pca_var_explained[2], "% variance)")
+  ) +
+  annotate("text", x = -20, y = -7, label = "sqm", color = "#666666", fontface = "bold", size = p2sqm.label) +
+  annotate("text", x = 15, y = -9.3, label = "mac", color = "#a6761d", fontface = "bold", size = p2mac.label) +
+  annotate("text", x = 20, y = 7, label = "hum", color = "#1b9e77", fontface = "bold", size = p2hum.label) +
+  scale_color_manual(values = c(Human="#1b9e77", Macaque="#a6761d", Squirrel_monkey="#666666"))
+
+ggsave("PCA_500.tiff", width = 12.5, height = 8, bg = "white")
+
+
+```
+
+
+
+```{r}
+
+#################### run the above to get what is needed for 4nMicrobeSerumLiverRNA.Rmd
+comps <- c("humac", "sqmac")
+sample_dist_viz <- list()
+sample_pca_viz <- list()
+sample_glmpca_viz <- list()
+##### PREP DESeq2 DATASET / SAMPLE DIST METRICS / DIFF EXP ANALYSIS RESULTS AND FILT.
+for (i in comps){
+  
+  setClassUnion("ExpData", c("matrix", "RangedSummarizedExperiment"))
+  
+  meta <- eval(as.name(paste("metadata_", i, sep = "")))
+
+  #ddetermine the control group
+  if ("Squirrel_monkey" %in% meta$Species) {
+    ref_level <- "Squirrel_monkey"
+  } else if ("Human" %in% meta$Species) {
+    ref_level <- "Human"
+  } else {
+    stop()
+  }
+
+  #relevel Species so  control = reference
+  meta$Species <- relevel(factor(meta$Species), ref = ref_level)
+
+  #assign   global metadata object
+  assign(paste("metadata_", i, sep = ""), meta)
+  
+  assign(
+    paste("dds_", i, sep = ""),
+    DESeqDataSetFromMatrix(countData = eval(as.name(paste("counts_",i,sep=""))),
+                             colData = eval(as.name(paste("metadata_",i,sep=""))),
+                             design = ~Species))
+  smallestGroupSize <- 8
+  assign(
+    paste("keep",i,sep="_"),
+         rowSums(counts(eval(as.name(paste("dds_", i, sep = "")))) >= 10) >= smallestGroupSize)
+  
+  assign(
+    paste("dds_", i, sep = ""),
+    eval(as.name(paste("dds_", i, sep = "")))[eval(as.name(paste("keep_", i, sep = ""))),]
+  )
+  
+  assign(
+    paste("dds_", i, sep = ""),
+    estimateSizeFactors(eval(as.name(paste("dds_", i, sep = ""))))
+  )
+  
+  assign(
+    paste("rld_", i, sep = ""),
+    rlog(eval(as.name(paste("dds_", i, sep = ""))), blind = FALSE)
+    )
+  
+
+  
+  sample_dist_viz[[i]] <- pheatmap(as.matrix(dist(t(assay(eval(as.name(paste("rld_", i, sep = ""))))))),
+                                 clustering_distance_rows = dist(t(assay(eval(as.name(paste("rld_", i, sep = "")))))),
+                                 clustering_distance_cols = dist(t(assay(eval(as.name(paste("rld_", i, sep = "")))))),
+                                 col = colorRampPalette( rev(brewer.pal(9, "Blues")) )(255))
+  
+  assign(
+    paste("pcaData_", i, sep = ""),
+    plotPCA(eval(as.name(paste("rld_", i, sep = ""))), intgroup = c("Species"), returnData = TRUE)
+    )
+  
+  sample_pca_viz[[i]] <- 
+    ggplot(eval(as.name(paste("pcaData_", i, sep = ""))),
+           aes(x = PC1, y = PC2, color = Species, shape = Species, label = name)) +
+    geom_point(size =3) +
+    xlab(paste0("PC1: ", round(100 * attr(eval(as.name(paste("pcaData_", i, sep = ""))), "percentVar"))[1], "% variance")) +
+    ylab(paste0("PC2: ", round(100 * attr(eval(as.name(paste("pcaData_", i, sep = ""))), "percentVar"))[2], "% variance")) +
+    coord_fixed() +
+    ggtitle(paste("PCA with rld", i, "data")) + 
+    geom_text()
+  
+  sample_glmpca_viz[[i]] <- data.frame(glmpca(counts(eval(as.name(paste("dds_", i, sep = "")))), L=2)$factors)
+  sample_glmpca_viz[[i]]$Species <- eval(as.name(paste("dds_", i, sep = "")))$Species
+  sample_glmpca_viz[[i]] <- ggplot(sample_glmpca_viz[[i]],
+                                   aes(x = dim1, y = dim2, color = Species)) +
+    geom_point(size =3) +
+    coord_fixed() +
+    ggtitle(paste("glmpca - Generalized PCA w/ Rld", i, "data"))
+    
+  assign(
+    paste("dds_", i, sep = ""),
+    DESeq(eval(as.name(paste("dds_", i, sep = ""))))
+    )
+  
+    assign(
+    paste("res_", i, sep = ""),
+    data.frame(
+      results(eval(as.name(paste("dds_", i, sep = ""))),
+              alpha = 0.05, lfcThreshold=0)) #%>%
+      #subset(., padj <=0.05)
+    )
+
+}
+
+# write_rds(res_humac, "res_humac.Rds")
+# write_rds(res_sqmac, "res_sqmac.Rds")
+
+```
+
+
+
+
+
+
+## microbially-correlated, clustered gene co-expression network 
+
+```{r, humac corncob X humac padj sig genes}
+
+set.seed(123)
+#### must run cecal_shotgun.Rmd first before this can be run
+library(corncob)
+library(igraph)
+library(ggraph)
+library(tidyverse)
+library(RColorBrewer)
+library(igraph)
+library(ggraph)
+library(tidyverse)
+
+corn_da_humac <- read_rds("corn_da_humac")
+corn_da_sqmac <- read_rds("corn_da_sqmac")
+# for correlating with pairwise humac rna-seq; get humac corncob taxa subset from OG phyloseq
+humac_corntax <- t(otu_table(prune_taxa(corn_da_humac$significant_taxa, psP))) %>% 
+  .[!grepl("sqm", rownames(.)), ]
+### the preceding block has essentially the full deseq2 workflow with draft viz and stats, but for this we want to backtrack a bit
+### we want to use the rld_humac transformed counts so that
+### significant, corncob ID'd microbes from the humac comparison can direct a selection of genes
+### this gene set will be used to subset the res_humac dataframe from deseq() workflow, and then we can grab observations with padj < 0.1 
+###### make sure rownames match for matrix correlation bw abundance matrix and rna-seq
+colnames(rld_humac)
+colnames(rld_humac) <- c("mac8","mac7","mac4","mac2","mac6","mac3","mac1","mac5",
+                         "hum22","hum20","hum21","hum26","hum23","hum25","hum24","hum19")
+#### make sure we have same samples across each matrix for 16 tot , 8per group
+shared_samples <- intersect(rownames(humac_corntax), colnames(assay(rld_humac)))
+## make the subsets and matrix-ify/reshape w/ t() as needed so samps are rows
+microbe_mat <- humac_corntax[shared_samples, ]
+expr_mat <- t(assay(rld_humac)[, shared_samples])
+#### actually correlate; we're correlating all the transformed genes with all *significant* microbes from corncob
+cor_HumacMat <- cor(expr_mat, microbe_mat, method = "spearman")
+###### get top 500 pos/neg correlated genes per microbe
+top_pos <- apply(cor_HumacMat, 2, function(x) names(sort(x, decreasing = TRUE))[1:100])
+pos_genes <- unique(as.vector(as.matrix(top_pos)))
+top_neg <- apply(cor_HumacMat, 2, function(x) names(sort(x, decreasing = FALSE))[1:100])
+neg_genes <- unique(as.vector(as.matrix(top_neg)))
+top_genes <- unique(c(pos_genes, neg_genes))
+
+humacRes_microbeCord <- res_humac[rownames(dds_humac) %in% top_genes, ]
+humac_microbeCordsig <- humacRes_microbeCord %>% filter(padj < 0.1 & pvalue < 0.05)
+
+sqmacRes_microbeCord <- res_sqmac[rownames(dds_sqmac) %in% top_genes, ]
+sqmac_microbeCordsig <- sqmacRes_microbeCord %>% filter(padj < 0.1 & pvalue < 0.05)
+
+##expr_mat: genes x samples (only ~70 DE genes which are significant and correlated to diff abun of corncob microbes)
+filtered_expr <- expr_mat[, grep(paste(intersect(rownames(humac_microbeCordsig),rownames(sqmac_microbeCordsig)), collapse = "|"), colnames(expr_mat))]
+gene_symbols <- mapIds(org.Mm.eg.db, keys = colnames(filtered_expr), 
+                       keytype = "ENSEMBL", 
+                       column = "SYMBOL", 
+                       multiVals = "first")
+colnames(filtered_expr) <- ifelse(is.na(gene_symbols), colnames(filtered_expr), gene_symbols)
+###correlation and matrix elongate for plotting
+cor_mat <- cor((filtered_expr), method = "spearman") 
+cor_mat[lower.tri(cor_mat)] <- NA  # upper triangle only
+cor_df <- reshape2::melt(cor_mat, na.rm = TRUE)
+names(cor_df) <- c("Gene1", "Gene2", "correlation")
+##strong thresh for network
+edges <- cor_df %>% filter(abs(correlation) > 0.70)
+g <- graph_from_data_frame(edges, directed = FALSE)
+V(g)$degree <- igraph::degree(g)
+
+### detect louvain clustered modules; switching to infomap --
+## more robust for a smaller network; less coarse network results giving us more specific focused modularity
+### more robust than WGCNA which focuses on defining groups by co-expression (and also requires bit larger sample size/#input genes)
+comm <- cluster_louvain(g)
+
+V(g)$module <- factor(membership(comm))
+modules <- levels(V(g)$module)
+
+module_colors <- brewer.pal(length(modules), "Set3")
+names(module_colors) <- modules
+
+# Prepare node info
+node_info_humac <- tibble(
+  name = V(g)$name,
+  module = V(g)$module,
+  degree = V(g)$degree
+)
+
+
+# Identify hubs per module
+top_hubs <- node_info_humac %>%
+  group_by(module) %>%
+  filter(degree == max(degree)) %>%
+  pull(name)
+
+# Assign shapes: triangles for hubs, circles for others
+node_info_humac <- node_info_humac %>%
+  mutate(
+    shape_group = ifelse(name %in% top_hubs, 24, 21),  # 24=triangle, 21=circle
+    outline_color = ifelse(degree >= 30, "red", "black")  # red outline for degree ≥50
+  )
+
+
+# Match order
+node_info_humac <- node_info_humac[match(V(g)$name, node_info_humac$name), ]
+
+# Assign to graph vertices
+V(g)$module <- factor(node_info_humac$module, levels = modules)
+V(g)$shape_group <- node_info_humac$shape_group
+V(g)$degree <- node_info_humac$degree
+V(g)$name <- node_info_humac$name
+V(g)$outline_color <- node_info_humac$outline_color
+
+# Plot
+library(grid)  # for custom legend key grobs
+
+
+# remove prefix 
+#node_info_humac <- node_info_humac %>%
+ # mutate(name = str_replace_all(name,"ENSMUSG0000", ""))
+
+
+#node_info_sqmac <- node_info_sqmac %>%
+ # mutate(name = str_replace_all(name,"ENSMUSG0000", ""))
+
+```
+```{r sqmac corncob X sqmac padj sig genes}}
+set.seed(123)
+library(corncob)
+# for correlating with pairwise humac rna-seq; get humac corncob taxa subset from OG phyloseq
+sqmac_corntax <- t(otu_table(prune_taxa(corn_da_sqmac$significant_taxa, psP))) %>% 
+  .[!grepl("hum", rownames(.)), ]
+### the preceding block has essentially the full deseq2 workflow with draft viz and stats, but for this we want to backtrack a bit
+### we want to use the rld_humac transformed counts so that
+### significant, corncob ID'd microbes from the humac comparison can direct a selection of genes
+### this gene set will be used to subset the res_humac dataframe from deseq() workflow, and then we can grab observations with padj < 0.1 
+###### make sure rownames match for matrix correlation bw abundance matrix and rna-seq
+colnames(rld_sqmac)
+colnames(rld_sqmac) <- c("sqm12","sqm14","sqm16","sqm18","mac8","mac7","sqm13","sqm9",
+                         "sqm11","sqm10","mac4","mac2","mac6","mac3","mac1","mac5","sqm17")
+#### make sure we have same samples across each matrix for 16 tot , 8per group
+shared_samples <- intersect(rownames(sqmac_corntax), colnames(assay(rld_sqmac)))
+## make the subsets and matrix-ify/reshape w/ t() as needed so samps are rows
+microbe_mat <- sqmac_corntax[shared_samples, ]
+expr_mat <- t(assay(rld_sqmac)[, shared_samples])
+#### actually correlate; we're correlating all the transformed genes with all *significant* microbes from corncob
+cor_SqmacMat <- cor(expr_mat, microbe_mat, method = "spearman")
+###### get top 500 pos/neg correlated genes per microbe
+top_pos <- apply(cor_SqmacMat, 2, function(x) names(sort(x, decreasing = TRUE))[1:100])
+pos_genes <- unique(as.vector(as.matrix(top_pos)))
+top_neg <- apply(cor_SqmacMat, 2, function(x) names(sort(x, decreasing = FALSE))[1:100])
+neg_genes <- unique(as.vector(as.matrix(top_neg)))
+top_genes <- unique(c(pos_genes, neg_genes))
+
+length(intersect(rownames(humac_microbeCordsig),rownames(sqmac_microbeCordsig)))
+##expr_mat: genes x samples (only ~70 DE genes which are significant and correlated to diff abun of corncob microbes)
+filtered_expr <- expr_mat[, grep(paste(intersect(rownames(humac_microbeCordsig),rownames(sqmac_microbeCordsig)), collapse = "|"), colnames(expr_mat))]
+gene_symbols <- mapIds(org.Mm.eg.db, keys = colnames(filtered_expr), 
+                       keytype = "ENSEMBL", 
+                       column = "SYMBOL", 
+                       multiVals = "first")
+colnames(filtered_expr) <- ifelse(is.na(gene_symbols), colnames(filtered_expr), gene_symbols)
+###correlation and matrix elongate for plotting
+cor_mat <- cor((filtered_expr), method = "spearman") 
+cor_mat[lower.tri(cor_mat)] <- NA  # upper triangle only
+cor_df <- reshape2::melt(cor_mat, na.rm = TRUE)
+names(cor_df) <- c("Gene1", "Gene2", "correlation")
+##strong thresh for network
+edges <- cor_df %>% filter(abs(correlation) > 0.70)
+g <- graph_from_data_frame(edges, directed = FALSE)
+V(g)$degree <- igraph::degree(g)
+
+### detect louvain clustered modules; switching to infomap --
+## more robust for a smaller network; less coarse network results giving us more specific focused modularity
+### more robust than WGCNA which focuses on defining groups by co-expression (and also requires bit larger sample size/#input genes)
+comm <- cluster_louvain(g)
+
+V(g)$module <- factor(membership(comm))
+modules <- levels(V(g)$module)
+
+module_colors <- brewer.pal(length(modules), "Set3")
+names(module_colors) <- modules
+
+# Prepare node info
+node_info_sqmac <- tibble(
+  name = V(g)$name,
+  module = V(g)$module,
+  degree = V(g)$degree
+)
+
+# Identify hubs per module
+top_hubs <- node_info_sqmac %>%
+  group_by(module) %>%
+  filter(degree == max(degree)) %>%
+  pull(name)
+
+# Assign shapes: triangles for hubs, circles for others
+node_info_sqmac <- node_info_sqmac %>%
+  mutate(
+    shape_group = ifelse(name %in% top_hubs, 24, 21),  # 24=triangle, 21=circle
+    outline_color = ifelse(degree >= 30, "red", "black")  # red outline for degree ≥50
+  )
+
+# Match order
+node_info_sqmac <- node_info_sqmac[match(V(g)$name, node_info_sqmac$name), ]
+
+# Assign to graph vertices
+V(g)$module <- factor(node_info_sqmac$module, levels = modules)
+V(g)$shape_group <- node_info_sqmac$shape_group
+V(g)$degree <- node_info_sqmac$degree
+V(g)$name <- node_info_sqmac$name
+V(g)$outline_color <- node_info_sqmac$outline_color
+
+
+
+
+theme_bold <- theme(
+  legend.title = element_text(size = 30,face = "bold"),
+  legend.text = element_text(size = 28,face = "bold"),
+  plot.title = element_text(size = 24,face = "bold"),
+  plot.subtitle = element_text(size = 18, face = "bold"),
+  strip.text = element_text(size = 16,face = "bold"),
+  legend.position = c(0.1,0.88),
+  panel.spacing = unit(0.8, "lines"))
+
+layout_df <- create_layout(g, layout = "stress")
+
+layout_df$x <- jitter(layout_df$x, amount = 0.25)
+
+layout_df$y <- jitter(layout_df$y, amount = 0.25) 
+
+
+# Plot
+library(grid)  # for custom legend key grobs
+
+Node_plot1 <- ggraph(g, layout = layout_df) +
+  geom_edge_link(aes(edge_alpha = abs(correlation)), color = "grey70", show.legend = FALSE) +
+geom_node_point(aes(size = degree, fill = module, shape = factor(shape_group), color = outline_color),
+                stroke = 1.5,
+                show.legend = c(fill = TRUE, shape = FALSE, size = FALSE, color = FALSE)) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 8, fontface = "bold") +
+  scale_fill_manual(
+    values = module_colors,
+    name = "Module",
+    guide = guide_legend(
+      override.aes = list(shape = 21)  # legend keys are circles, colored by module
+    )
+  ) +
+  scale_shape_manual(
+    values = c(`21` = 21, `24` = 24),
+    guide = "none"  # hide shape legend
+  ) +
+  scale_color_identity() + #use outline colors literally, no legend
+  guides( # enlarge guide nodes
+  fill = guide_legend(
+    override.aes = list(
+      size = 4.5,
+      stroke = 1,
+      shape = 21,
+      color = "black" ))) +
+  theme_void() +  
+ theme(panel.border = element_rect(color = "black", fill = NA, size = 1.2)) + 
+  theme_bold 
+
+#  labs(title = "Squirrel Monkey-Macaque Donor Gene Correlation Network:",
+ #      subtitle = "Louvain module, Hub Triangles and High-Degree Centrality (>=30) Highlighted nodes (red)")
+
+ggsave("sqmac.1.node.plot.tiff", width = 12, height = 10, bg= "white")
+```
+
+```{r}
+set.seed(123)
+library(gridExtra)
+# Use ENSEMBL IDs as vertex names for consistency:
+# When creating filtered_expr, keep colnames as ENSEMBL IDs, but get symbols separately
+filtered_expr_ens <- expr_mat[, grep(paste(intersect(rownames(humac_microbeCordsig), rownames(sqmac_microbeCordsig)), collapse = "|"), colnames(expr_mat))]
+# Keep colnames as ENSEMBL IDs for graph construction
+
+gene_symbols <- mapIds(org.Mm.eg.db, keys = colnames(filtered_expr_ens), 
+                       keytype = "ENSEMBL", 
+                       column = "SYMBOL", 
+                       multiVals = "first")
+
+cor_mat <- cor(filtered_expr_ens, method = "spearman") 
+cor_mat[lower.tri(cor_mat)] <- NA
+cor_df <- reshape2::melt(cor_mat, na.rm = TRUE)
+names(cor_df) <- c("Gene1", "Gene2", "correlation")
+edges <- cor_df %>% filter(abs(correlation) > 0.7)
+
+g <- graph_from_data_frame(edges, directed = FALSE)
+V(g)$degree <- igraph::degree(g)
+
+comm <- cluster_louvain(g)
+V(g)$module <- factor(membership(comm))
+modules <- levels(V(g)$module)
+module_colors <- brewer.pal(length(modules), "Set3")
+
+node_info_sqmac <- tibble(
+  name = V(g)$name,   # ENSEMBL IDs here
+  module = V(g)$module,
+  degree = V(g)$degree
+)
+
+top_hubs <- node_info_sqmac %>%
+  group_by(module) %>%
+  filter(degree == max(degree)) %>%
+  pull(name)
+ 
+# Add DE info by matching ENSEMBL IDs (graph vertex names) to res_humac rownames (also ENSEMBL IDs)
+node_info_sqmac <- node_info_sqmac %>%
+  mutate(
+    log2FC = res_sqmac$log2FoldChange[match(name, rownames(res_sqmac))],
+    padj = res_sqmac$padj[match(name, rownames(res_sqmac))],
+    sig = ifelse(padj < 0.1, TRUE, FALSE),
+    shape_group = ifelse(name %in% top_hubs, 24, 21),
+    outline_color = ifelse(degree >= 30, "red", "black"),
+    symbol = gene_symbols[match(name, names(gene_symbols))]  # this is key: gene symbols mapped by ENSEMBL IDs
+  )
+
+
+# Then match to graph vertices:
+node_info_sqmac <- node_info_sqmac[match(V(g)$name, node_info_sqmac$name), ]
+
+V(g)$symbol <- node_info_sqmac$symbol  # assign symbols to vertices
+V(g)$log2FC <- node_info_sqmac$log2FC
+V(g)$padj <- node_info_sqmac$padj
+V(g)$sig <- node_info_sqmac$sig
+V(g)$shape_group <- node_info_sqmac$shape_group
+V(g)$outline_color <- node_info_sqmac$outline_color
+V(g)$degree <- node_info_sqmac$degree
+
+
+theme_bold <- theme(
+  legend.title = element_text(size = 30,face = "bold"),
+  legend.text = element_text(size = 22,face = "bold"),
+  plot.title = element_text(size = 24,face = "bold"),
+  plot.subtitle = element_text(size = 18, face = "bold"),
+  strip.text = element_text(size = 16,face = "bold"),
+  legend.position = c(0.2,0.88),
+  panel.spacing = unit(0.8, "lines"))
+
+layout_df <- create_layout(g, layout = "stress")
+
+layout_df$x <- jitter(layout_df$x, amount = 0.2)
+
+layout_df$y <- jitter(layout_df$y, amount = 0.3)
+
+ Node_plot2 <- ggraph(g, layout = layout_df) +
+  geom_edge_link(aes(edge_alpha = abs(correlation)), color = "grey70", show.legend = FALSE) +
+  geom_node_point( aes(size = degree,fill = log2FC, shape = factor(shape_group), color = outline_color),  stroke = 1.5, show.legend = c(fill = TRUE, shape = FALSE, size = FALSE, color = FALSE)) +
+geom_node_text(aes(label = symbol), repel = TRUE, size = 8, fontface = "bold") + 
+  scale_fill_gradient2(
+    low = "blue", mid = "white", high = "red", midpoint = 0,
+    name = "Log2 Fold Change") +
+  scale_shape_manual(
+    values = c(`21` = 21, `24` = 24),
+    guide = "none") +
+  scale_color_identity() + # use outline_color literally (black or red)
+  theme_void() + 
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, size = 1.2)
+  )+
+  theme_bold 
+ 
+ # labs(
+  #  title = "Macaque v Squirrel Monkey Donor Gene Correlation Network",
+   # subtitle = "Microbially correlated DE genes, Triangular Hubs, High-Degree centrality (≥30) in Red"
+  #)
+ 
+ggsave("sqmac.2.node.plot.tiff", width = 12, height = 10, bg = "white")
+
+
+```
+
+
+```{r, humac corncob plot 1}
+corn_da_humac <- read_rds("corn_da_humac")
+corn_da_sqmac <- read_rds("corn_da_sqmac")
+# for correlating with pairwise humac rna-seq; get humac corncob taxa subset from OG phyloseq
+humac_corntax <- t(otu_table(prune_taxa(corn_da_humac$significant_taxa, psP))) %>% 
+  .[!grepl("sqm", rownames(.)), ]
+### the preceding block has essentially the full deseq2 workflow with draft viz and stats, but for this we want to backtrack a bit
+### we want to use the rld_humac transformed counts so that
+### significant, corncob ID'd microbes from the humac comparison can direct a selection of genes
+### this gene set will be used to subset the res_humac dataframe from deseq() workflow, and then we can grab observations with padj < 0.1 
+###### make sure rownames match for matrix correlation bw abundance matrix and rna-seq
+colnames(rld_humac)
+colnames(rld_humac) <- c("mac8","mac7","mac4","mac2","mac6","mac3","mac1","mac5",
+                         "hum22","hum20","hum21","hum26","hum23","hum25","hum24","hum19")
+#### make sure we have same samples across each matrix for 16 tot , 8per group
+shared_samples <- intersect(rownames(humac_corntax), colnames(assay(rld_humac)))
+## make the subsets and matrix-ify/reshape w/ t() as needed so samps are rows
+microbe_mat <- humac_corntax[shared_samples, ]
+expr_mat <- t(assay(rld_humac)[, shared_samples])
+#### actually correlate; we're correlating all the transformed genes with all *significant* microbes from corncob
+cor_HumacMat <- cor(expr_mat, microbe_mat, method = "spearman")
+###### get top 500 pos/neg correlated genes per microbe
+top_pos <- apply(cor_HumacMat, 2, function(x) names(sort(x, decreasing = TRUE))[1:100])
+pos_genes <- unique(as.vector(as.matrix(top_pos)))
+top_neg <- apply(cor_HumacMat, 2, function(x) names(sort(x, decreasing = FALSE))[1:100])
+neg_genes <- unique(as.vector(as.matrix(top_neg)))
+top_genes <- unique(c(pos_genes, neg_genes))
+
+humacRes_microbeCord <- res_humac[rownames(dds_humac) %in% top_genes, ]
+humac_microbeCordsig <- humacRes_microbeCord %>% filter(padj < 0.1 & pvalue < 0.05)
+
+sqmacRes_microbeCord <- res_sqmac[rownames(dds_sqmac) %in% top_genes, ]
+sqmac_microbeCordsig <- sqmacRes_microbeCord %>% filter(padj < 0.1 & pvalue < 0.05)
+
+##expr_mat: genes x samples (only ~70 DE genes which are significant and correlated to diff abun of corncob microbes)
+filtered_expr <- expr_mat[, grep(paste(intersect(rownames(humac_microbeCordsig),rownames(sqmac_microbeCordsig)), collapse = "|"), colnames(expr_mat))]
+gene_symbols <- mapIds(org.Mm.eg.db, keys = colnames(filtered_expr), 
+                       keytype = "ENSEMBL", 
+                       column = "SYMBOL", 
+                       multiVals = "first")
+colnames(filtered_expr) <- ifelse(is.na(gene_symbols), colnames(filtered_expr), gene_symbols)
+###correlation and matrix elongate for plotting
+cor_mat <- cor((filtered_expr), method = "spearman") 
+cor_mat[lower.tri(cor_mat)] <- NA  # upper triangle only
+cor_df <- reshape2::melt(cor_mat, na.rm = TRUE)
+names(cor_df) <- c("Gene1", "Gene2", "correlation")
+##strong thresh for network
+edges <- cor_df %>% filter(abs(correlation) > 0.70)
+g <- graph_from_data_frame(edges, directed = FALSE)
+V(g)$degree <- igraph::degree(g)
+
+### detect louvain clustered modules; switching to infomap --
+## more robust for a smaller network; less coarse network results giving us more specific focused modularity
+### more robust than WGCNA which focuses on defining groups by co-expression (and also requires bit larger sample size/#input genes)
+comm <- cluster_louvain(g)
+
+V(g)$module <- factor(membership(comm))
+modules <- levels(V(g)$module)
+
+module_colors <- brewer.pal(length(modules), "Set3")
+names(module_colors) <- modules
+
+# Prepare node info
+node_info_humac <- tibble(
+  name = V(g)$name,
+  module = V(g)$module,
+  degree = V(g)$degree
+)
+
+
+# Identify hubs per module
+top_hubs <- node_info_humac %>%
+  group_by(module) %>%
+  filter(degree == max(degree)) %>%
+  pull(name)
+
+# Assign shapes: triangles for hubs, circles for others
+node_info_humac <- node_info_humac %>%
+  mutate(
+    shape_group = ifelse(name %in% top_hubs, 24, 21),  # 24=triangle, 21=circle
+    outline_color = ifelse(degree >= 30, "red", "black")  # red outline for degree ≥50
+  )
+
+
+# Match order
+node_info_humac <- node_info_humac[match(V(g)$name, node_info_humac$name), ]
+
+# Assign to graph vertices
+V(g)$module <- factor(node_info_humac$module, levels = modules)
+V(g)$shape_group <- node_info_humac$shape_group
+V(g)$degree <- node_info_humac$degree
+V(g)$name <- node_info_humac$name
+V(g)$outline_color <- node_info_humac$outline_color
+
+# Plot
+library(grid)  # for custom legend key grobs
+
+
+# remove prefix 
+#node_info_humac <- node_info_humac %>%
+ # mutate(name = str_replace_all(name,"ENSMUSG0000", ""))
+
+
+#node_info_sqmac <- node_info_sqmac %>%
+ # mutate(name = str_replace_all(name,"ENSMUSG0000", ""))
+
+
+theme_bold <- theme(
+  legend.title = element_text(size = 30,face = "bold"),
+  legend.text = element_text(size = 30,face = "bold"),
+  plot.title = element_text(size =,face = "bold", hjust = ),
+  plot.subtitle = element_text(size = , face = "bold"),
+  strip.text = element_text(size = 16,face = "bold"),
+  legend.position = c(0.1,0.88),
+  panel.spacing = unit(0.8, "lines"))
+
+layout_df <- create_layout(g, layout = "stress")
+
+layout_df$x <- jitter(layout_df$x, amount = 0.25)
+
+layout_df$y <- jitter(layout_df$y, amount = 0.25) 
+
+set.seed(123)
+Node_plot3 <- ggraph(g, layout = layout_df) +
+  geom_edge_link(aes(edge_alpha = abs(correlation)), color = "grey70", show.legend = FALSE) +
+geom_node_point(aes(size = degree, fill = module, shape = factor(shape_group), color = outline_color),
+                stroke = 1.5,
+                show.legend = c(fill = TRUE, shape = FALSE, size = FALSE, color = FALSE)) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 7.5, fontface = "bold") +
+    scale_fill_manual(
+    values = module_colors,
+    name = "Module",
+    guide = guide_legend(
+      override.aes = list(shape = 21)  # legend keys are circles, colored by module
+    )
+  ) + theme_bold + 
+  scale_shape_manual(
+    values = c(`21` = 21, `24` = 24), 
+    guide = "none"  # hide shape legend
+  ) +
+  scale_color_identity() +  # use outline colors literally, no legend
+   guides( # enlarge guide nodes
+  fill = guide_legend(
+    override.aes = list(
+      size = 4.5,
+      stroke = 1,
+      shape = 21,
+      color = "black" ))) +
+  theme_void() + 
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1.2)) +
+  theme_bold 
+
+  #labs(title = "Human-Macaque Donor Gene Correlation Network:",
+     #  subtitle = "Louvain module, Hub Triangles and High-Degree Centrality (>=30) Highlighted nodes (red)")
+
+ggsave("humac.1.node.plot.tiff", bg = "white", height = 10, width = 12 )
+
+```
+
+```{r}
+
+set.seed(123)
+# Use ENSEMBL IDs as vertex names for consistency:
+# When creating filtered_expr, keep colnames as ENSEMBL IDs, but get symbols separately
+
+filtered_expr_ens <- expr_mat[, grep(paste(intersect(rownames(humac_microbeCordsig), rownames(sqmac_microbeCordsig)), collapse = "|"), colnames(expr_mat))]
+# Keep colnames as ENSEMBL IDs for graph construction
+
+gene_symbols <- mapIds(org.Mm.eg.db, keys = colnames(filtered_expr_ens), 
+                       keytype = "ENSEMBL", 
+                       column = "SYMBOL", 
+                       multiVals = "first")
+
+cor_mat <- cor(filtered_expr_ens, method = "spearman") 
+cor_mat[lower.tri(cor_mat)] <- NA
+cor_df <- reshape2::melt(cor_mat, na.rm = TRUE)
+names(cor_df) <- c("Gene1", "Gene2", "correlation")
+edges <- cor_df %>% filter(abs(correlation) > 0.7)
+######## directed  = TRUE now because we're interested in seeing how differentially expressed genes across network influence others 
+######## roundabout way to try to map some kind of modularity onto this log2fc network
+g <- graph_from_data_frame(edges, directed = FALSE)
+V(g)$degree <- igraph::degree(g)
+
+comm <- cluster_louvain(g)
+V(g)$module <- factor(membership(comm))
+modules <- levels(V(g)$module)
+module_colors <- brewer.pal(length(modules), "Set3")
+
+node_info_humac <- tibble(
+  name = V(g)$name,   # ENSEMBL IDs here
+  module = V(g)$module,
+  degree = V(g)$degree
+)
+
+top_hubs <- node_info_humac %>%
+  group_by(module) %>%
+  filter(degree == max(degree)) %>%
+  pull(name)
+
+# Add DE info by matching ENSEMBL IDs (graph vertex names) to res_humac rownames (also ENSEMBL IDs)
+node_info_humac <- node_info_humac %>%
+  mutate(
+    log2FC = res_humac$log2FoldChange[match(name, rownames(res_humac))],
+    padj = res_humac$padj[match(name, rownames(res_humac))],
+    sig = ifelse(padj < 0.1, TRUE, FALSE),
+    shape_group = ifelse(name %in% top_hubs, 24, 21),
+    outline_color = ifelse(degree >= 30, "red", "black"),
+    symbol = gene_symbols[match(name, names(gene_symbols))]  # this is key: gene symbols mapped by ENSEMBL IDs
+  )
+
+# Then match to graph vertices:
+node_info_humac <- node_info_humac[match(V(g)$name, node_info_humac$name), ]
+
+V(g)$symbol <- node_info_humac$symbol  # assign symbols to vertices
+V(g)$log2FC <- node_info_humac$log2FC
+V(g)$padj <- node_info_humac$padj
+V(g)$sig <- node_info_humac$sig
+V(g)$shape_group <- node_info_humac$shape_group
+V(g)$outline_color <- node_info_humac$outline_color
+V(g)$degree <- node_info_humac$degree
+
+
+theme_bold <- theme(
+  legend.title = element_text(size = 30,face = "bold"),
+  legend.text = element_text(size = 20.5,face = "bold"),
+  plot.title = element_text(size = 24,face = "bold"),
+  plot.subtitle = element_text(size = 18, face = "bold"),
+  strip.text = element_text(size = 16,face = "bold"),
+  legend.position = c(0.2,0.88),
+  panel.spacing = unit(0.8, "lines"))
+
+layout_df <- create_layout(g, layout = "stress")
+
+layout_df$x <- jitter(layout_df$x, amount = 0.25)
+
+layout_df$y <- jitter(layout_df$y, amount = 0.25) 
+
+
+
+ Node_plot4 <- ggraph(g, layout = layout_df) +
+  geom_edge_link(aes(edge_alpha = abs(correlation)), color = "grey70", show.legend = FALSE) +
+  geom_node_point( aes(size = degree,fill = log2FC, 
+                       shape = factor(shape_group), color = outline_color),  stroke = 1.5,
+                   show.legend = c(fill = TRUE, shape = FALSE, size = FALSE, color = FALSE)) +
+geom_node_text(aes(label = symbol), repel = TRUE, size = 8, fontface = "bold") +
+  scale_fill_gradient2(
+    low = "blue", mid = "white", high = "red", midpoint = 0,
+    name = "Log2 Fold Change"
+  ) +
+  scale_shape_manual(
+    values = c(`21` = 21, `24` = 24),
+    guide = "none"
+  ) +
+  scale_color_identity() +  # use outline_color literally (black or red)
+  theme_void() + 
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1.2)) +
+  theme_bold 
+ 
+ # labs(
+  #  title = "Macaque v Human Donor Gene Correlation Network",
+   # subtitle = "Microbially correlated DE genes, Triangular Hubs, High-Degree centrality (≥30) in Red"
+  #)
+
+ggsave("humac.2.Node.graph.tiff", width = 12, height = 10, bg = "white")
+ 
+
+#Warning plot 1 and 2 come out on bottom Warning
+tiff(".node.comb.tiff", units="in", width=22, height=10, res=300)
+
+grid.arrange(Node_plot1, Node_plot2, Node_plot3, Node_plot4, nrow=2)
+
+
+dev.off
+
+ 
+
+```
+
+
+## subset microbially correlated, sig observed liver genes (padj<0.1) 
+
+```{r}
+
+humac_microbeCordsig$Gene <- mapIds(org.Mm.eg.db, 
+                         keys = as.character(rownames(humac_microbeCordsig)),
+                         keytype = "ENSEMBL", column = "SYMBOL")
+sqmac_microbeCordsig$Gene <- mapIds(org.Mm.eg.db, 
+                         keys = as.character(rownames(sqmac_microbeCordsig)),
+                         keytype = "ENSEMBL", column = "SYMBOL")
+
+Mac_DEs_loose <- intersect(humac_microbeCordsig$Gene,sqmac_microbeCordsig$Gene)
+#### 74 Genes total we report this in PAPER 1
+Mac_DEs_loose
+
+merged_df <- merge(node_info_humac, node_info_sqmac, by = "symbol", suffixes = c("_humac", "_sqmac"))
+#### we should now determine which set of these genes from any given module are shared between the modular network plots -- we find 3:
+#### module 1, 2, and 4
+##### we report these genes in brief lists outlined in PAPER 1
+merged_df %>%
+  filter(module_humac == module_sqmac, module_humac == 4) %>%
+#### adjust number below to select cluster to examine which genes are mutual between pw comparisons (clusters = 1,2,3,4,5; see above projections)
+  pull(symbol) %>% noquote() %>% print()
+
+### we should also consider which genes from the projected networks are shared, and mutually UPREGULATED ; PAPER 1
+merged_df %>%
+  filter(module_humac == module_sqmac, module_humac == 4) %>%
+  filter(log2FC_humac > 0, log2FC_sqmac > 0) %>%
+  pull(symbol) %>% noquote() %>% print()
+### and probably also DOWNREGULATED too; PAPER 1
+merged_df %>%
+  filter(module_humac == module_sqmac, module_humac == 4) %>%
+  filter(log2FC_humac < 0, log2FC_sqmac < 0) %>%
+  pull(symbol) %>% noquote() %>% print()
+
+```
+
+
+## Normalized count for mutually microbially correlated gene set; plotting significance
+
+```{r}
+
+library(rstatix)
+
+#set theme
+theme_bold <- theme(
+  axis.title.x = element_text(size = 38, face = "bold", color = "black"),
+  axis.title.y = element_text(size = 32,face = "bold", color = "black", vjust = -5),
+  axis.text.x = element_text(face = "bold", size = 19, color = "black"),
+  axis.text.y = element_text(size = 24,face = "bold", color = "black"),
+  legend.title = element_text(size = 36,face = "bold"),
+  legend.text = element_text(size = 30 ,face = "bold"),
+  plot.title = element_text(size = 0,face = "bold", hjust = 0),
+  axis.line = element_line(size = 3.5, color = "black"))
+
+
+meta_sqmac <- counts(dds_sqmac, normalized = TRUE) %>% reshape2::melt() %>% 
+  mutate(sampleid = Var2) %>% left_join(metadata_sqmac, by = "sampleid") %>%
+  mutate(Gene = mapIds(org.Mm.eg.db, keys = as.character(Var1), keytype = "ENSEMBL", column = "SYMBOL")) %>% as_tibble()
+meta_humac <- counts(dds_humac, normalized = TRUE) %>% reshape2::melt() %>%
+  mutate(sampleid = Var2) %>% left_join(metadata_humac, by = "sampleid") %>%
+  mutate(Gene = mapIds(org.Mm.eg.db, keys = as.character(Var1), keytype = "ENSEMBL", column = "SYMBOL")) %>% as_tibble()
+
+sqmac_macde <- filter(meta_sqmac, grepl(paste(c(Mac_DEs_loose), collapse='|'), Gene))
+humac_macde <- filter(meta_humac, grepl(paste(c(Mac_DEs_loose), collapse='|'), Gene))
+
+
+humac_macde <- humac_macde %>%
+  mutate(Species = str_replace_all(Species, c(
+    "Human" = "Hum",
+    "Macaque" = "Mac",
+    "Squirrel_monkey" = "Sqm"
+  )))
+
+sqmac_macde <- sqmac_macde %>%
+  mutate(Species = str_replace_all(Species, c(
+    "Human" = "Hum",
+    "Macaque" = "Mac",
+    "Squirrel_monkey" = "Sqm"
+  )))
+
+stat.test.sm <- sqmac_macde %>% group_by(Gene) %>% wilcox_test(value ~ Species) %>%
+  adjust_pvalue(method = "BH") %>% filter(p.adj < 0.1 & p < 0.05) 
+stat.test.hm <- humac_macde %>% group_by(Gene) %>% wilcox_test(value ~ Species) %>%
+  adjust_pvalue(method = "BH") %>% filter(p.adj < 0.1 & p < 0.05)
+
+p1 <- ggplot(sqmac_macde %>% filter(Gene %in% stat.test.sm$Gene),
+       aes(x = Gene, y = value)) +
+  geom_boxplot(aes(x = Gene, y = value, fill = Species), position = position_dodge(0.9)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = .5, hjust=1, size = 11), axis.title.y = element_text(hjust = 3)) +
+  theme_bold +
+  theme(axis.text.x = ggtext::element_markdown())+
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black"))+
+  scale_fill_manual(values = c("Mac" ="#a6761d", "Sqm" = "#666666")) +
+  xlab("\nGene") +
+  ylab("Normalized Count\n") +
+  stat_compare_means(aes(group = Species),method = 'wilcox.test', label = "p.signif", size = 3)
+p2 <- ggplot(humac_macde %>% filter(Gene %in% stat.test.hm$Gene),
+       aes(x = Gene, y = value)) +
+  geom_boxplot(aes(fill = Species), position = position_dodge(0.9)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 11), axis.title.y = element_text(hjust = 3)) +
+   theme_bold +
+  theme(axis.text.x = ggtext::element_markdown()) +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  scale_fill_manual(values = c("Mac" ="#a6761d", "Hum" = "#1b9e77")) +
+  xlab("\nGene") + 
+  ylab("Normalized Count\n") +
+  stat_compare_means(aes(group = Species), method = 'wilcox.test', label = "p.signif", size = 3)
+
+#save 
+tiff("normalizedcount.diff.microb.tiff", units="in", width=22, height=14, res=300)
+
+grid.arrange(p1,p2)
+
+dev.off
+
+#humac_macde %>% filter("Ncor1" %in% stat.test.hm$Gene)
+
+#to plot specific genes
+
+# ggplot(meta_sqmac %>% filter(Gene %in% ""),
+#        aes(x = Gene, y = value)) +
+#   geom_boxplot(aes(fill = Species), position = position_dodge(0.9)) +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 11)) +
+#   theme(axis.text.x = ggtext::element_markdown()) +
+#   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+#         panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+#   scale_fill_manual(values = c(Macaque ="#a6761d", Squirrel_monkey = "#1b9e77")) +
+#   xlab("\ngene") +
+#   ylab("normalized count\n") +
+#   stat_compare_means(aes(group = Species), method = 'wilcox.test', label = "p.signif", size = 3)
+
+
+
+
+
+
+
+```
+
+
+## GO term enrichment at biological process and molecular function ont. levels
+
+```{r}
+
+#set theme
+theme_bold <- theme(
+  axis.title.x = element_text(size = 32, face = "bold", color = "black"),
+  axis.title.y = element_text(size = 32,face = "bold", color = "black"),
+  axis.text.x = element_text(face = "bold", size = 26, color = "black"),
+  axis.text.y = element_text(size = 26,face = "bold", color = "black"),
+  legend.title = element_text(size = 21,face = "bold"),
+  legend.text = element_text(size = 20 ,face = "bold"),
+  plot.title = element_text(size = 28,face = "bold", hjust = -.5), 
+  panel.border = element_rect(colour = "black", fill = NA, size = 5),
+  strip.text = element_text(size = 20,face = "bold"),
+  axis.line = element_line(size = 4, color = "black"),
+  (plot.margin = margin(t = 1, r = 1, b = 1, l = 2000, unit = "cm"))
+)
+
+###################### grouping function does not take a universe option so this is sufficient
+ggo_sharegeneBP <- groupGO(gene = na.omit(intersect(rownames(humac_microbeCordsig),rownames(sqmac_microbeCordsig))), 
+                           OrgDb = org.Mm.eg.db,
+                           ont      = "BP",
+                           level    = 3,
+                           readable = TRUE,
+                           keyType = "ENSEMBL")
+#View(ggo_sharegeneBP[order(-ggo_sharegeneBP$Count),])
+barplot(ggo_sharegeneBP %>% arrange(-Count),
+                         drop = TRUE, title = "G.O. Biol. Path", font.size = 8) + 
+  geom_bar(stat = "identity", fill = "#800000") +
+  theme_bold +
+  theme(legend.position = "none" ,
+        panel.grid = element_blank(),
+        plot.title = element_text(hjust = 0.5) )
+
+ggsave("Gobiol.path.tiff",height=8, width=14)
+###################### grouping function does not take a universe option so this is sufficient
+ggo_sharegeneMF <- groupGO(gene = na.omit(intersect(rownames(humac_microbeCordsig),rownames(sqmac_microbeCordsig))), 
+                        
+                           OrgDb = org.Mm.eg.db,
+                           ont      = "MF",
+                           level    = 3,
+                           readable = TRUE,
+                           keyType = "ENSEMBL")
+#View(ggo_sharegeneMF[order(-ggo_sharegeneMF$Count),])
+barplot(ggo_sharegeneMF %>% arrange(-Count), 
+        drop = TRUE, title = "G.O. Molec. Function", font.size = 8) + 
+  theme_bold +
+  geom_bar(stat = "identity", fill = "#800000") +
+  theme(legend.position = "none", 
+        panel.grid = element_blank(),
+         plot.title = element_text(hjust = 0.5) )
+
+ggsave("Liverpathenrich.path.tiff",height=8, width=14)
+##### Classic run of clusterprofiler/enrichGO function for hypergeometric path ID
+ego_sharegene  <- enrichGO(
+                            gene = na.omit(intersect(rownames(humac_microbeCordsig),rownames(sqmac_microbeCordsig))), 
+                universe = c(rownames(res_humac),rownames(res_sqmac)),
+                keyType = "ENSEMBL",
+                OrgDb = org.Mm.eg.db,
+                ont = "ALL",
+                pAdjustMethod = "BH",
+                pvalueCutoff = 0.05,
+                qvalueCutoff = 0.1,
+                readable = TRUE)
+
+
+theme_bold <- theme(
+  axis.title.x = element_text(size = 32, face = "bold", color = "black"),
+  axis.title.y = element_text(size = 32,face = "bold", color = "black"),
+  axis.text.x = element_text(face = "bold", size = 26, color = "black"),
+  axis.text.y = element_text(size = 26,face = "bold", color = "black"),
+  legend.title = element_text(size = 21,face = "bold"),
+  legend.text = element_text(size = 20 ,face = "bold"),
+  plot.title = element_text(size = 28,face = "bold", hjust = -.5),
+  strip.text = element_text(size = 20,face = "bold"),
+  axis.line = element_line(size = 4, color = "black"),
+  (plot.margin = margin(t = 1, r = 1, b = 1, l = 2000, unit = "cm"))
+)
+
+#View(ego_sharegene[order(-ego_sharegene$Count),])
+dotplot(ego_sharegene) +
+  scale_y_discrete(labels = function(x) str_replace_all(x, "process", "")) +  
+  ylab("Biological Process") +
+  theme_classic() +
+  theme( 
+  axis.line.x.bottom = element_line(size = 3, color = "black"),
+  axis.line.x.top    = element_line(size = 3, color = "black"),
+  axis.line.y.left   = element_line(size = 3, color = "black"),
+  axis.line.y.right  = element_line(size = 3, color = "black"),
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank(),
+  panel.grid = element_blank())+ 
+  theme_bold 
+
+
+ggsave("Go-all-onts.tiff", height = 6, width =11)
+
+
+
+humac_microbeCordsig$Ent <-  mapIds(org.Mm.eg.db, keys = rownames(humac_microbeCordsig), keytype = "ENSEMBL", column = "ENTREZID")
+sqmac_microbeCordsig$Ent <-  mapIds(org.Mm.eg.db, keys = rownames(sqmac_microbeCordsig), keytype = "ENSEMBL", column = "ENTREZID")
+
+res_humac$Gene <-  mapIds(org.Mm.eg.db, keys = rownames(res_humac), keytype = "ENSEMBL", column = "SYMBOL")
+res_sqmac$Gene <-  mapIds(org.Mm.eg.db, keys = rownames(res_sqmac), keytype = "ENSEMBL", column = "SYMBOL")
+
+##### Classic run of clusterprofiler/enrichkegg function for hypergeometric path ID
+mapping <- AnnotationDbi::select(
+  org.Mm.eg.db,
+  keys = c(rownames(res_humac),rownames(res_sqmac)),
+  keytype = "ENSEMBL",
+  columns = "ENTREZID"
+) 
+kegg_res <- enrichKEGG(gene = intersect((humac_microbeCordsig$Ent),(sqmac_microbeCordsig$Ent)),
+                       universe = mapping$ENTREZID,organism = "mmu", keyType = "kegg",
+                       pvalueCutoff = 0.05, qvalueCutoff = 0.1, pAdjustMethod = "BH",
+                       minGSSize = 10, maxGSSize = 500, use_internal_data = FALSE)
+
+# add columns
+
+ego_sharegene@result$label <- "GO_Biological_Process"
+kegg_res@result$label <- "KEGG_Pathway"
+
+
+#filter ontology out
+ego_sharegene@result$ONTOLOGY <- NULL
+
+#remove more
+kegg_res@result$category <- NULL
+kegg_res@result$subcategory <- NULL
+
+
+#make dataframe
+GO_Bio_gene <- ego_sharegene@result
+
+#remove process 
+GO_Bio_gene <- GO_Bio_gene %>%
+  mutate( Description = str_replace_all(Description, "process", ""))
+
+#rbind
+combined_enrich <- rbind(kegg_res@result, GO_Bio_gene)
+
+#load packages
+library(ggplot2)
+library(dplyr)
+library(forcats)
+
+#take each plots terms
+#terms_kegg <- kegg_res@result %>%
+ # slice_min(order_by = pvalue, Description n = 9) %>%
+#  pull(Description)
+
+#terms_go <- ego_sharegene@result %>%
+ # slice_min(order_by = p.adjust, ), n = 10) %>%
+  #pull(Description)
+
+
+target_kegg <- c("Complement and coagulation cascades", "Glycine, serine and threonine metabolism",
+"Fatty acid metabolism", "Retinol metabolism", "Inflammatory mediator regulation of TRP channels",
+"Linoleic acid metabolism", "2-Oxocarboxylic acid metabolism", "Cysteine and methionine metabolism",
+"Ovarian steroidogenesis")
+
+target_go <-  c("small molecule biosynthetic ","monocarboxylic acid metabolic ","organic acid biosynthetic ","carboxylic acid biosynthetic ","lipid biosynthetic ","fatty acid metabolic ","sulfur compound metabolic ","monocarboxylic acid biosynthetic ","acyl-CoA metabolic ","thioester metabolic ")
+
+
+Go_biocheck <- GO_Bio_gene %>%
+  filter(Description %in% (target_go))
+
+
+#filter to have those terms 
+combined_filtered <- combined_enrich %>%
+  filter(Description %in% c(target_go, target_kegg))
+
+# Convert GeneRatio from "x/y" string to numeric
+combined_filtered$GeneRatio <- sapply(
+  strsplit(as.character(combined_filtered$GeneRatio), "/"),
+  function(x) as.numeric(x[1]) / as.numeric(x[2])
+)
+
+
+#build top terms
+top_terms <- combined_filtered %>%
+  arrange(label, GeneRatio) %>%
+  mutate(term = paste(label, Description, sep = "___")) %>%
+  mutate(term = factor(term, levels = rev(unique(term)))) %>%
+  group_by(label) %>%
+  # Order each group so lowest GeneRatio comes first
+  arrange(GeneRatio, .by_group = TRUE) %>%
+  # Create a term factor with group-wise ordering preserved
+  mutate(term = factor(Description, levels = unique(Description))) %>%
+  ungroup()
+
+# Arrange terms so lower GeneRatio appears at the bottom of the plot
+#top_terms <- top_terms %>%
+ # arrange(label, GeneRatio) %>%
+  #mutate(term = fct_inorder(Description)) %>%  # preserve order for plotting
+  #mutate(term = fct_rev(term))                 # reverse so low ratios are at bottom
+ 
+#order
+top_terms <- top_terms %>%
+  mutate(label = factor(label, levels = c("KEGG_Pathway", "GO_Biological_Process")))
+
+
+
+#for fixing
+top_terms <- top_terms %>%
+  mutate(label = str_replace_all(label, "_", " "))
+
+top_terms <- top_terms %>%
+  mutate(label = str_replace_all(label, "GO", ""))
+
+# Assign group colors
+label_colors <- c(" Biological Process" = "darkviolet", "KEGG Pathway" = "darkgreen")
+
+
+#order labels on right side
+label_positions <- top_terms %>%
+  group_by(label) %>%
+  summarise(y = mean(as.numeric(term))- 3, .groups = "drop") %>%
+  mutate(color = label_colors[label])
+
+
+
+
+#change position
+#top_terms <- top_terms %>%
+  # Make sure KEGG comes first in the label order
+ # mutate(label = factor(label, levels = c("KEGG Pathway", "Biological Process"))) %>%
+  # Arrange data by label, then by GeneRatio within each group
+  #arrange(label, GeneRatio) %>%
+  # Build a unique term label that preserves group structure
+  #mutate(term = paste(label, Description, sep = "___")) %>%
+  # Reverse the term order so KEGG ends up visually at the bottom
+  #mutate(term = factor(term, levels = rev(unique(term))))
+
+top_terms <- top_terms %>%
+  mutate(term_color = label_colors[label])
+
+
+top_terms <- top_terms %>%
+  arrange(GeneRatio) %>%                                   # low → high across all rows
+  mutate(term = factor(Description, levels = unique(Description)))
+
+#plot
+
+ggplot(top_terms, aes(x = GeneRatio, y = term)) +
+  # Draw connector lines from baseline to each dot
+  geom_segment(aes(x = 0, xend = GeneRatio, yend = term),
+               color = "gray70", size = 0.5) +
+  geom_point(aes(size = Count, color = p.adjust), alpha = 0.9) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_text(data = label_positions,
+            aes(x = max(top_terms$GeneRatio) + 0.2, y = y, label = label),
+            inherit.aes = FALSE,
+            angle = 90, hjust = 0.1,
+            fontface = "bold", size = 10.5,
+            colour = label_colors[label_positions$label]) +
+  scale_color_gradient(low = "red", high = "blue", name = "Adjusted p-value") +
+  scale_size(range = c(3, 7.5)) +
+  labs(
+    x = "Gene Ratio",
+    y = NULL,
+    size = "Gene Count",
+    color = "Adjusted p-value"
+  ) +
+  # Apply classic theme 
+theme_classic(base_size = 14) +
+  theme(
+    axis.text.y = element_text(face = "bold", color =  "#00000000", size = 21),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(face = "bold", color = "black", size =22.8),
+    axis.title.x = element_text(face = "bold", size = 24),
+    legend.title = element_text(face = "bold", size = 24),
+    legend.text = element_text(size = 21), 
+    plot.margin = margin(t = 1, r = 1.5, b = 1, l = 0, unit = "cm"),
+    panel.border = element_rect(color = "black", fill = NA, size = 1)
+  ) + 
+  #scale_y_discrete(labels = NULL) +
+  geom_text(data = top_terms,
+          aes(x = -Inf, y = term, label = Description),
+          inherit.aes = FALSE,
+          hjust = 1.02,
+          size = 7.2, fontface = "bold", colour = top_terms$term_color) +
+  coord_cartesian(clip = "off") 
+
+
+
+
+#save to directory as tiff
+ggsave("combinedKegg_Go.tiff", height = 10, width = 18)
+
+dotplot(kegg_res)  +
+  scale_y_discrete(labels = function(x) str_replace_all(x, "process", "")) +  
+  ylab("KEGG Pathway") +
+  theme_classic() + 
+      geom_point() +
+      theme(legend.background = element_rect(fill = NA),
+  axis.line.x.bottom = element_line(size = 3, color = "black"),
+  axis.line.x.top    = element_line(size = 3, color = "black"),
+  axis.line.y.left   = element_line(size = 3, color = "black"),
+  axis.line.y.right  = element_line(size = 3, color = "black"),
+  panel.grid.major = element_blank(), 
+  panel.grid.minor = element_blank())+ 
+  theme_bold 
+
+
+ggsave("KEGG.3.tiff", height = 6, width =13.45)
+
+
+
+```
+
+
+## Plot on enrichr universe of results
+
+
+```{r}
+
+######## not working with background set... which... incidentally is something they also don't make available via ma'ayan lab gui
+######## https://maayanlab.cloud/Enrichr/
+# enrichres_backid <- rba_enrichr_add_background(background_genes = c(res_humac$Gene,res_sqmac$Gene))
+# 
+# enrichres <- rba_enrichr(gene_list = intersect(humac_microbeCordsig$Gene,sqmac_microbeCordsig$Gene),
+#                          #gene_set_library = "all",
+#                          background_genes = enrichres_backid)
+########## we don't have a background so this is inherently riskier to interpret from than results like those above, BUT
+########## we have so many more databases to access in using enrichr (218)-- maybe results from a run of enrichr can at least help contextualize what we ########## observed from our run of clusterprofiler
+enrichres <- rba_enrichr(gene_list = intersect(humac_microbeCordsig$Gene,sqmac_microbeCordsig$Gene),
+                         gene_set_library = "all")
+enrichres_filt_hits <- lapply(enrichres, function(x)
+       filter(x, P.value < 0.05 &
+                Adjusted.P.value < 0.1 &
+                as.numeric(sub("/.*", "", Overlap)) >= 20 &
+                str_detect(Term, c("cho|fatty|fat|lip|amino|amine|prop|but|acet|bil|scfa|short-chain|short chain"))
+              )
+       )
+enrichres_filt_score <- lapply(enrichres, function(x)
+       filter(x, P.value < 0.05 &
+                Adjusted.P.value < 0.1 &
+                Combined.Score > 1000 &
+                #as.numeric(sub("/.*", "", Overlap)) >= 38 &
+                #Combined.Score > 1500 &
+                str_detect(Term, c("cho|fatty|fat|lip|amin|amino|amine|prop|but|acet|bil|scfa|short-chain|short chain"))
+              )
+       )
+
+
+
+theme_bold <- theme(
+  axis.title.x = element_text(size = 16, face = "bold"),
+  axis.title.y = element_text(size = 16,face = "bold"),
+  axis.text.x = element_text(face = "bold", size = 14, color = "black"),
+  axis.text.y = element_text(size = 14,face = "bold", color = "black"),
+  legend.title = element_text(size = 14.8,face = "bold"),
+  legend.text = element_text(size = 14,face = "bold"),
+  plot.title = element_text(size = 22,face = "bold", hjust = .5),
+  strip.text = element_text(size = 16,face = "bold"),
+  axis.line = element_line(size = 2.2, color = "black"),
+  panel.spacing = unit(0.8, "lines"))
+  
+
+enrichres_filt_hits <- purrr::discard(enrichres_filt_hits, ~nrow(.) == 0)
+enrichres_filt_score <- purrr::discard(enrichres_filt_score, ~nrow(.) == 0)
+enrichr_list <- c(enrichres_filt_hits,enrichres_filt_score)
+#combine dfs across enrichr results and filter for columns to plot on (e.g. padj, db info, res/term to plot on y);sort on decr padj val
+combined_df <- bind_rows(enrichr_list, .id = "database") %>%
+  filter(!is.na(Adjusted.P.value)) %>%
+  select(Term, Adjusted.P.value, database) %>%
+  group_by(database) %>%
+  slice_min(order_by = Adjusted.P.value, n = 10, with_ties = FALSE) %>%
+  ungroup() %>% unique()
+
+combined_df <- combined_df %>%
+  mutate(database = str_replace_all(database, "_", " "))
+#install and load palletteer
+#install.packages("paletteer")
+library(paletteer)
+paletteer_d("nbapalettes::jazz_city")
+
+# Step 1: Combine and clean all enrichment results
+combined_df <- bind_rows(enrichr_list, .id = "database") %>%
+  filter(!is.na(Adjusted.P.value)) %>%
+  mutate(database = str_replace_all(database, "_", " "))
+
+# Step 2: Select top 20 terms by significance (across all databases)
+top_terms <- combined_df %>%
+  arrange(Adjusted.P.value) %>%
+  distinct(Term, .keep_all = TRUE) %>%
+  slice_head(n = 20) %>%
+  pull(Term)
+
+# Step 3: Filter full dataset to keep all database entries for those 20 terms
+plot_df <- combined_df %>%
+  filter(Term %in% top_terms)
+
+
+# Step 4: Plot only those terms
+ggplot(plot_df, aes(x = reorder(Term, -Adjusted.P.value), y = -log10(Adjusted.P.value), fill = database)) +
+  geom_col(position = position_dodge()) +
+  coord_flip() +
+  labs(title = "",
+       x = "",
+       y = "-log10 Adjusted P-value",
+       fill = "Database") +
+  theme_minimal() + 
+  theme_bold +
+  theme(panel.grid = element_blank())+
+  scale_fill_manual(
+  values = c(
+    "#010101FF", "#5D2A2CFF", "#C8102EFF","#DC582AFF", "#FFC72CFF"
+  )
+)
+
+ggsave("enrichd.new.color.tiff", bg = "white", height = 7, width = 14.4)
+
+# Plot all bars, colored by database
+ggplot(combined_df, aes(x = reorder(Term, -Adjusted.P.value), y = -log10(Adjusted.P.value), fill = database)) +
+  geom_col(position = position_dodge()) +
+  coord_flip() +
+  labs(title = "Top Enrichr Terms Across Databases",
+       x = "",
+       y = "-log10 Adjusted P-value",
+       fill = "Database") +
+  theme_minimal() + theme_bold 
+
+
+combined_df %>% arrange(Adjusted.P.value) %>% head(n = 21) %>% pull(Term)
+
+ggsave("enrichd.tiff", bg = "white", height = 7, width = 12)
+
+# terms <- combined_df %>% arrange(Adjusted.P.value) %>% head(n = 21) %>% pull(Term)
+# library(stringdist)
+# dist_mat <- stringdistmatrix(terms, terms, method = "cosine", q = 2)
+# sim_mat <- 1 - dist_mat  # similarity = 1 - distance
+# 
+# rownames(sim_mat) <- colnames(sim_mat) <- terms
+# mds <- cmdscale(as.dist(1 - sim_mat), k = 2)
+# mds_df <- as.data.frame(mds)
+# mds_df$term <- terms
+# 
+# ggplot(mds_df, aes(V1, V2, label = term)) +
+#   geom_point() +
+#   geom_text_repel() +
+#   theme_minimal() +
+#   labs(title = "MDS of Pathway Term Similarity", x = "Dim 1", y = "Dim 2")
+
+```
+
+
+
+
+
+
+```{r}
+# Basically validated findings from above 
+
+# enrichres_filt_hitsHmac <- lapply(enrichres_humac, function(x)
+#        filter(x, P.value < 0.05 &
+#                 Adjusted.P.value < 0.05 &
+#                 #Combined.Score > 1500 &
+#                 str_detect(Overlap, stringr::str_flatten(paste("^",c(50:100), sep = ""), collapse = "|"))
+#               )
+#        )
+# 
+# enrichres_filt_scoreHmac <- lapply(enrichres_humac, function(x)
+#        filter(x, P.value < 0.05 &
+#                 Adjusted.P.value < 0.05 &
+#                 Combined.Score > 1500 &
+#                 str_detect(Term, c("bile|cho|fatty|fat|amino|amine"))
+#               )
+#        )
+# enrichres_filt_hitsHmac <- purrr::discard(enrichres_filt_hitsHmac, ~nrow(.) == 0)
+# enrichres_filt_scoreHmac <- purrr::discard(enrichres_filt_scoreHmac, ~nrow(.) == 0)
+# 
+# View(enrichres_filt_hitsHmac)
+# View(enrichres_filt_scoreHmac)
+# Basically validated findings from above 
+# enrichres_filt_hitsSmac <- lapply(enrichres_sqmac, function(x)
+#        filter(x, P.value < 0.05 &
+#                 Adjusted.P.value < 0.05 &
+#                 #Combined.Score > 1500 &
+#                 str_detect(Overlap, stringr::str_flatten(paste("^",c(50:100), sep = ""), collapse = "|"))
+#               )
+#        )
+# enrichres_filt_scoreSmac <- lapply(enrichres_sqmac, function(x)
+#        filter(x, P.value < 0.05 &
+#                 Adjusted.P.value < 0.05 &
+#                 Combined.Score > 1500 &
+#                 str_detect(Term, c("bile|cho|fatty|fat|amino"))
+#               )
+# 
+#        )
+# enrichres_filt_hitsSmac <- purrr::discard(enrichres_filt_hitsSmac, ~nrow(.) == 0)
+# enrichres_filt_scoreSmac <- purrr::discard(enrichres_filt_scoreSmac, ~nrow(.) == 0)
+# 
+# View(enrichres_filt_hitsSmac)
+# View(enrichres_filt_scoreSmac)
+
+```
+
+
+The ERV genes I was previously interested showed no distinct differential expression patterning between groups. Nup153, an ERV-associated gene shows little DE patterning.
+```{r ERV explorer}
+
+# ## ANNOTATE H SAPIENS
+# mousetab <- read.table("/Users/apulvino/AmatoLab/QualPrelimAnalysis/mouse_anno.txt", sep = "\t", header = TRUE)
+# res.framemouse <- data.frame(res)
+# res.framemouse$Gene.stable.ID <- rownames(res.framemouse)
+# 
+# mouseres <- merge(mousetab, res.framemouse, by = "Gene.stable.ID")
+# 
+# ## use interpro annotation to search gag,pro,pol,erv,retroelement,etc keywords that will help you ID retroelements of interest between papio and human here
+# 
+# #read homo interpro tab
+# mouseinterpro <- read.delim("/Users/apulvino/AmatoLab/QualPrelimAnalysis/mouse_interpro.txt", header = TRUE, sep = "\t")
+# mouseres_final <- merge(mouseinterpro, mouseres, by = "Gene.stable.ID")
+# 
+# # subset homo gut wild expression results for just gag,pol,pro,retrovirus,and retroviral entries
+# mouse_retro <- dplyr::filter(mouseres_final, grepl("retrovirus|Retrovirus|retroviral|Retroviral|retrovirus-like|Retrovirus-like|retrotransposon|Retrotransposon|Retro-transposon|retro-transposon|retrotransposon-derived|Retrotransposon-derived|retroelement|Retroelement",mouseres_final$Interpro.Description))
+# 
+# mouse_retro_uniq <- unique(mouse_retro)
+# 
+# ### ACADS
+# plotCounts(dds, gene="ENSMUSG00000029545", intgroup = "Species")
+# ### CDO1
+# plotCounts(dds, gene="ENSMUSG00000033022", intgroup = "Species")
+# plotCounts(dds, gene="ENSMUSG00000029630", intgroup = "Species")
+# 
+#plotCounts(dds_humac, gene="ENSMUSG00000022463", intgroup = "Species")
+# plotCounts(dds, gene="ENSMUSG00000063856", intgroup = "Species")
+
+```
+
