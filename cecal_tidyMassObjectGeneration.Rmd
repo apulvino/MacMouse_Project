@@ -1,0 +1,843 @@
+---
+title: "tidyMass Object Generation"
+output: html_document
+date: "2023-06-06"
+---
+
+For file conversion (.raw to .mzXML) see "building proteowizard on quest" document (See: Notes).
+
+```{r, installs}
+
+#install.packages("readr")
+library(readr)
+#BiocManager::install("BiocParallel")
+## built using 1.34.2 of biocparallel
+#BiocManager::install("Rdisop")
+#remotes::install_gitlab("tidymass/metid@a06da3e08cfe218bb59078597c58a06ff8da9ac0")
+#if(!require(remotes)){
+#install.packages("remotes")
+#}
+#remotes::install_gitlab("tidymass/massprocesser")
+library(massprocesser)
+library(tidyverse)
+library(xcms)
+library(MSnbase)
+library(mzR)
+library(massdataset)
+#remotes::install_gitlab("tidymass/massqc@728d748427edcc9871c91b99137c3e3adb9ac92c")
+#remotes::install_gitlab("tidymass/masscleaner")
+library(massqc)
+library(masscleaner)
+#library(massdatabase)
+library(massstat)
+library(metid)
+#remotes::install_github("tidymass/massdatabase")
+library(massdatabase)
+library(metpath)
+
+
+
+```
+
+The work below follows from the top of the "Raw data processing" section of the tidymass workflow.
+(See: https://www.tidymass.org/start/whole_workflow/#data-preparation)
+
+```{r, raw data processing}
+
+## https://tidymass.github.io/massprocesser/articles/raw_data_processing.html
+##### see /projects/b1057/apulvino/cecal_metabolomics/tidyXcms/tidyXcms.R for processing specs notes
+## positive mode 
+object_pos <- read_rds("/Users/apulvino/cecal_metabolomics/object_pos.Rds")
+
+# negative mode
+object_neg <- read_rds("/Users/apulvino/cecal_metabolomics/object_neg.Rds")
+
+
+```
+
+
+
+## Preliminary Data Exploration 
+
+For positive mode we have 26 samples and 1839 variables. We have 26 subjects in the study with no separate QC samples or controls (squirrel monkey originally serves as an outgroup). All samples were processed in a single batch.
+
+```{r, data prep for pos mode}
+
+#load("/Users/apulvino/cecal_metabolomics/output_mzXML/positive_scans3/Result/object")
+#object_pos <- object
+object_pos
+
+## this you will need to construct yourself, it's essentially metadata you'll just add to each object you build (one each for pos and neg scans)
+
+sample_info_pos <- data.frame(
+  sample_id = (object_pos@sample_info$sample_id),
+  injection.order = (object_pos@sample_info$injection.order),
+  class = (rep("Subject", length(object_pos@sample_info$injection.order))),
+  batch = (rep("1", length(object_pos@sample_info$injection.order))),
+  subject_id = (c(paste("mac_",1:length(1:8), sep = ""),
+                  paste("sqm_",1:length(1:10), sep = ""),
+                  paste("hum_",1:length(1:8), sep = ""))),
+  group = (c(rep("mac", 8),
+           rep("sqm", 10),
+           rep("hum", 8)))
+)
+
+
+object_pos <- 
+  object_pos %>% 
+  activate_mass_dataset(what = "sample_info") %>%
+  dplyr::select(-c("group", "class", "injection.order"))
+object_pos <-
+  object_pos %>%
+  activate_mass_dataset(what = "sample_info") %>%
+  left_join(sample_info_pos,
+            by = "sample_id")
+object_pos %>% 
+  extract_sample_info() %>% 
+  head()
+dim(object_pos)
+object_pos %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::count(class)
+object_pos %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::count(group)
+object_pos %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::count(batch)
+
+
+```
+
+Now we can get the peak distribution plot (positive mode).
+There are 12,533 missing values. An example of a couple of "variables" are shown with their respective number of missing values.
+The heatmap is less informative than the following plot which also shows the missing values for samples as a percentage of the missing values... Perhaps the I performed better on the preps as I was doing them as missing values appear to go down from 1 to 26. You can literally see the "learning curve"...
+
+
+```{r, peak distribution plot and missing value for positive mode}
+
+object_pos %>%
+  `+`(1) %>% 
+  log(10) %>%
+  show_mz_rt_plot() +
+  scale_size_continuous(range = c(0.01, 2))
+
+get_mv_number(object = object_pos)
+get_mv_number(object = object_pos, by = "variable") %>% head()
+
+show_missing_values(object = object_pos, 
+                    show_column_names = FALSE, percentage = TRUE)
+show_sample_missing_values(object = object_pos, percentage = TRUE)
+show_variable_missing_values(object = object_pos, 
+                             percentage = TRUE, 
+                             show_x_text = FALSE, 
+                             show_x_ticks = FALSE)
+
+```
+
+Of course for negative mode we have the same number of samples (26), but with different number of variables/metabolites (1597). Again, we have 26 subjects in the study with no separate QC samples or control samples (squirrel monkey originally serves as outgroup). All samples were processed in a single batch.
+
+```{r, data prep for neg mode}
+
+#load("/Users/apulvino/cecal_metabolomics/output_mzXML/negative_scans3/Result/object")
+#object_neg <- object
+object_neg
+
+
+sample_info_neg <- data.frame(
+  sample_id = (object_neg@sample_info$sample_id),
+  injection.order = (object_neg@sample_info$injection.order),
+  class = (rep("Subject", length(object_neg@sample_info$injection.order))),
+  batch = (rep("1", length(object_neg@sample_info$injection.order))),
+  subject_id = (c(paste("mac_",1:length(1:8), sep = ""),
+                  paste("sqm_",1:length(1:10), sep = ""),
+                  paste("hum_",1:length(1:8), sep = ""))),
+  group = (c(rep("mac", 8),
+           rep("sqm", 10),
+           rep("hum", 8)))
+)
+
+
+object_neg <- 
+  object_neg %>% 
+  activate_mass_dataset(what = "sample_info") %>%
+  dplyr::select(-c("group", "class", "injection.order"))
+object_neg <-
+  object_neg %>%
+  activate_mass_dataset(what = "sample_info") %>%
+  left_join(sample_info_neg,
+            by = "sample_id")
+object_neg %>% 
+  extract_sample_info() %>% 
+  head()
+dim(object_neg)
+object_neg %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::count(class)
+object_neg %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::count(group)
+object_neg %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::count(batch)
+
+```
+
+Now we can get the peak distribution plot (negative mode).
+There are 11,003 missing values (looks like negative charge helped reduce missing values in some respect ~1500 fewer missing values in negative mode).
+There are hundreds of missing values per sample (in the vignette the output per sample is in the thousands. This is not inherently a bad sign I don't think)
+The next few are per "variable"/metabolite where there very few missing value.
+The heatmap indicates missing values but again I think the percentage dot plot that follows is a bit more helpful in terms of visualization.
+None of the missing values quite hit 40% on a sample basis which is an improvement from what we saw in positive mode exploration.
+
+```{r, peak distribution plot and missing value for negative mode}
+
+object_neg %>%
+  `+`(1) %>% 
+  log(10) %>%
+  show_mz_rt_plot() +
+  scale_size_continuous(range = c(0.01, 2))
+
+get_mv_number(object = object_neg)
+get_mv_number(object = object_neg, by = "sample") %>% 
+  head()
+get_mv_number(object = object_neg, by = "variable") %>% 
+  head()
+show_missing_values(object = object_neg, show_column_names = FALSE, percentage = TRUE)
+show_sample_missing_values(object = object_neg, percentage = TRUE)
+show_variable_missing_values(object = object_neg, 
+                             percentage = TRUE, 
+                             show_x_text = FALSE, 
+                             show_x_ticks = FALSE) +
+  scale_size_continuous(range = c(0.01, 1))
+
+
+```
+
+## Data Cleaning
+There was some trouble generating the quality assessment viz before cleaning so I went ahead with what the vignette suggests based on their own data... I was able to reproduce the same error with their own sample code
+THE MASSQC PACKAGE DOES APPEAR TO HAVE SEPARATE DOCS WHICH I COULD FOLLOW TO GENERATE THESE INDEPENDENTLY
+https://massqc.tidymass.org/articles/massqc_pca.html
+Removed variables which have MVs in more than 20% samples.
+Only 738 variables left in positive mode.
+We do the same in Negative mode.
+Only 622 variables left in negative mode.
+```{r, Data Quality assessment before Cleaning}
+
+#setwd("/Users/apulvino/cecal_metabolomics/output_mzXML/positive_scans4/data_quality_before_data_cleaning/Report")
+# change batch to character
+object_pos <- 
+  object_pos %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::mutate(batch = as.character(batch))
+
+object_neg <- 
+  object_neg %>% 
+  activate_mass_dataset(what = "sample_info") %>% 
+  dplyr::mutate(batch = as.character(batch))
+
+## massqc package is used to assess quality and generate separate reports for pos and neg scans along with pdf figures
+#massqc::massqc_report(object = object_pos, 
+#                     path = "/Users/apulvino/cecal_metabolomics/output_mzXML/positive_scans/data_quality_before_data_cleaning")
+
+
+Subject_id =
+  object_pos %>%
+  activate_mass_dataset(what = "sample_info") %>%
+  filter(class == "Subject") %>%
+  pull(sample_id)
+
+object_pos = object_pos %>%
+  mutate_variable_na_freq(according_to_samples = Subject_id)
+
+head(extract_variable_info(object_pos))
+
+object_pos <- 
+  object_pos %>% 
+  activate_mass_dataset(what = "variable_info") %>%
+  filter(na_freq < 0.2)
+object_pos
+
+Subject_id =
+  object_neg %>%
+  activate_mass_dataset(what = "sample_info") %>%
+  filter(class == "Subject") %>%
+  pull(sample_id)
+
+object_neg = object_neg %>%
+  mutate_variable_na_freq(according_to_samples = Subject_id)
+
+head(extract_variable_info(object_neg))
+
+object_neg <- 
+  object_neg %>% 
+  activate_mass_dataset(what = "variable_info") %>%
+  filter(na_freq < 0.2)
+object_neg
+
+```
+
+
+Time for outlier filtering.
+No outliers are detected within positive or negative samples.
+In the positive object, it is reported that mac 2 and mac 5 are detected as outliers based on pc_mad. They will be removed before carrying on.
+
+```{r}
+
+massdataset::show_sample_missing_values(object = object_pos,
+                                        color_by = "group",
+                                        order_by = "injection.order",
+                                        percentage = TRUE) +
+  theme(axis.text.x = element_text(size = 2)) +
+  scale_size_continuous(range = c(0.1, 2)) +
+  ggsci::scale_color_aaas()
+outlier_samples <- object_pos %>% 
+  `+`(1) %>% 
+  log(2) %>%
+  scale() %>%
+  detect_outlier()
+
+outlier_samples
+
+massdataset::show_sample_missing_values(object = object_neg,
+                                        color_by = "group",
+                                        order_by = "injection.order",
+                                        percentage = TRUE) +
+  theme(axis.text.x = element_text(size = 2)) +
+  scale_size_continuous(range = c(0.1, 2)) +
+  ggsci::scale_color_aaas()
+outlier_samples <- object_neg %>% 
+  `+`(1) %>% 
+  log(2) %>%
+  scale() %>%
+  detect_outlier()
+
+outlier_samples
+
+
+```
+
+
+```{r, remove outliers}
+
+# extract outliers from each object 
+# object <- object %>% activate_mass_dataset(what = "sample_info") %>% 
+#   filter(sample_id != "Ben-Ant-20240228-15")
+# object_pos <- object_pos %>% activate_mass_dataset(what = "sample_info") %>%
+#    filter(!sample_id %in% c("Ben-Oli-20230331-02","Ben-Oli-20230331-05"))
+# object_neg <- object_neg %>% activate_mass_dataset(what = "sample_info") %>%
+#   filter(!sample_id %in% c("Ben-Oli-20230331-02","Ben-Oli-20230331-05"))
+
+
+```
+
+
+
+ NOW MISSING VALUE IMPUTATION FOR POSITIVE AND NEGATIVE USING K-nearest neighbors clustering
+```{r}
+
+get_mv_number(object_pos)
+object_pos <- impute_mv(object = object_pos, method = "knn")
+get_mv_number(object_pos)
+
+get_mv_number(object_neg)
+object_neg <- impute_mv(object = object_neg, method = "knn")
+get_mv_number(object_neg)
+
+```
+
+
+
+## Now to the data normalization and integration steps
+
+```{r}
+
+## First, positive mode
+object_pos <-  normalize_data(object_pos, method =   "pqn" , pqn_reference = "median"  )
+
+object_pos2 <-  integrate_data(object_pos, method = "subject_median")
+
+object_pos2 %>%
+  `+`(1) %>%
+  log(2) %>%
+  massqc::massqc_pca(color_by = "group", line = FALSE)
+
+## Then, negative mode
+object_neg <- normalize_data(object_neg, method =  "pqn" , pqn_reference = "median"  )
+
+object_neg2 <- integrate_data(object_neg, method = "subject_median")
+
+object_neg2 %>%
+  `+`(1) %>%
+  log(2) %>%
+  massqc::massqc_pca(color_by = "group", line = FALSE)
+
+
+rm(object,  plot, outlier_samples, xdata2)
+
+```
+
+
+```{r}
+
+object_pos3 <-
+  mutate_ms2(
+    object = object_pos2,
+    column = "hilic",
+    polarity = "positive",
+    ms1.ms2.match.mz.tol = 40,
+    ms1.ms2.match.rt.tol = 150,
+    path = "/Users/apulvino/cecal_metabolomics/output_mzXML/positive_scans3"
+  )
+object_neg3 <-
+  mutate_ms2(
+    object = object_neg2,
+    column = "hilic",
+    polarity = "negative",
+    ms1.ms2.match.mz.tol = 40,
+    ms1.ms2.match.rt.tol = 150,
+    path = "/Users/apulvino/cecal_metabolomics/output_mzXML/negative_scans3"
+  )
+
+rm(object_neg, object_pos)
+
+```
+
+## Annotation of metabolites
+
+```{r, annotation of pos and neg mode metabolites}
+
+############### LOOKS LIKE THIS ACTUALLY GOT FIXED IN SOURCE... ** no longer need below fix **
+ ########## CRITICAL NOTE ###########
+######### MUST ALTER variable_info.csv so that variable_id column is `name` instead
+######### Two variable_info.csv files will be in each of  objpos_extract and  objneg_extract, and both files will need to be edited (see note/comment on line), if you're starting work below this point/annotation, you do not need to re-run to write/save these files
+setwd("/Users/apulvino/cecal_metabolomics/objpos_extract")
+export_mass_dataset(
+  object_pos3,
+  file_type = c("csv"),
+  ms2_file_type = c("mgf"),
+  path = "/Users/apulvino/cecal_metabolomics/objpos_extract"
+)
+file.rename("/Users/apulvino/cecal_metabolomics/objpos_extract/ms2_data_1.mgf",
+            "/Users/apulvino/cecal_metabolomics/objpos_extract/pos_ms2_data_1.mgf")
+
+# #writeLines(gsub("variable_id", "name", readLines("./objpos_extract/variable_info.csv")), "./objpos_extract/variable_info.csv")
+setwd("/Users/apulvino/cecal_metabolomics/objneg_extract")
+export_mass_dataset(
+  object_neg3,
+  file_type = c("csv"),
+  ms2_file_type = c("mgf"),
+  path = "/Users/apulvino/cecal_metabolomics/objneg_extract"
+)
+file.rename("/Users/apulvino/cecal_metabolomics/objneg_extract/ms2_data_1.mgf",
+            "/Users/apulvino/cecal_metabolomics/objneg_extract/neg_ms2_data_1.mgf")
+#writeLines(gsub("variable_id", "name", readLines("./objneg_extract/variable_info.csv")), "./objneg_extract/variable_info.csv")
+#####################################
+
+#getwd()
+# download_chebi_compound(path = ".", download.method = "httr")
+# chebi_database <- convert_chebi2metid(data = read_chebi_compound(path="."),
+#                                         path = ".")
+# save(chebi_database, file = "./chebi_database")
+### need to make sure you move chebi database (chebi_ms1) to each pos/neg subdirectory!
+#pos mode
+pos_params <- c(
+  "polarity = 'positive',",
+  "column = 'hilic',",
+  "ms1.match.ppm = 20,",
+  "ms2.match.ppm = 30,",
+  "ms2.match.tol = 0.55,",
+  "ms1.ms2.match.mz.tol = 40,",
+  "ms1.ms2.match.rt.tol = 150,",
+  "rt.match.tol = 60,",
+  "mz.ppm.thr = 500,",
+  "ms1.match.weight = 0.2,",
+  "rt.match.weight = 0.1,",
+  "ms2.match.weight = 0.7,",
+  "dp.forward.weight = 0.75,",
+  "dp.reverse.weight = 0.1,",
+  "fraction.weight = 0.25,",
+  "total.score.tol = 0.1,",
+  "candidate.num = 15"
+)
+#neg mode
+neg_params <- c(
+  "polarity = 'negative',",
+  "column = 'hilic',",
+  "ms1.match.ppm = 25,",
+  "ms2.match.ppm = 32,",
+  "ms2.match.tol = 0.6,",
+  "ms1.ms2.match.mz.tol = 40,",
+  "ms1.ms2.match.rt.tol = 150,",
+  "rt.match.tol = 65,",
+  "mz.ppm.thr = 500,",
+  "ms1.match.weight = 0.2,",
+  "rt.match.weight = 0.1,",
+  "ms2.match.weight = 0.7,",
+  "dp.forward.weight = 0.75,",
+  "dp.reverse.weight = 0.1,",
+  "fraction.weight = 0.25,",
+  "total.score.tol = 0.1,",
+  "candidate.num = 15"
+)
+
+p1  <- eval(parse(text = paste0("identify_metabolites_params(", paste(pos_params, collapse = ""), ",
+                                database = 'chebi_database')")))
+p2  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'chebi_database')")))
+#rm(chebi_database)
+#source("/Users/apulvino/cecal_metabolomics/objpos_extract/snyder_database_hilic0.0.3.rda")
+p3  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'snyder_database_hilic0.0.3')")))
+p4  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'snyder_database_hilic0.0.3')")))
+#rm(snyder_database_hilic0.0.3)
+# source("/Users/apulvino/Downloads/HILIC.database")
+# write_rds(HILIC.database, "/Users/apulvino/cecal_metabolomics/objpos_extract/HILIC.database")
+# write_rds(HILIC.database, "/Users/apulvino/cecal_metabolomics/objneg_extract/HILIC.database")
+p5  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'HILIC.database')")))
+p6  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'HILIC.database')")))
+#rm(HILIC.database)
+# load("fiehn_hilic_database0.0.3.rda")
+p7  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'fiehn_hilic_database0.0.3')")))
+p8  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'fiehn_hilic_database0.0.3')")))
+
+p9  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'hmdb_ms2')")))
+p10  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'hmdb_ms2')")))
+# rm(hmdb_database0.0.3)
+# 
+#load("/Users/apulvino/Downloads/massbank_database0.0.3.rda")
+p11  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'massbank_database0.0.3')")))
+p12  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'massbank_database0.0.3')")))
+# rm(massbank_database0.0.3)
+# 
+# load("/Users/apulvino/Downloads/mona_database0.0.3.rda")
+p13  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'mona_database0.0.3')")))
+p14  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'mona_database0.0.3')")))
+# rm(mona_database0.0.3)
+# load("/Users/apulvino/Downloads/orbitrap_database0.0.3.rda")
+p15  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'orbitrap_database0.0.3')")))
+p16  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'orbitrap_database0.0.3')")))
+
+# data <- read_kegg_compound(path = "./objpos_extract/")
+# kegg_database <- convert_kegg2metid(data = data, path = ".")
+# save(kegg_database, file = "./objpos_extract/kegg_database")
+p17  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'kegg_database')")))
+p18  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'kegg_database')")))
+
+
+#BiocManager::install("ChemmineR")
+# library(ChemmineR)
+# library(massdatabase)
+# data <- read_sdf_data_lipidmaps(file = "structures.sdf", path = "./objpos_extract")
+# lipidmaps_database <- convert_lipidmaps2metid(data = data, path = "./objpos_extract")
+# save(lipidmaps_database, file = "./objpos_extract/lipidmaps_database")
+#save(lipidmaps_database, file = "./objneg_extract/lipidmaps_database")
+p19  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'lipidmaps_database')")))
+p20  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'lipidmaps_database')")))
+
+#data <- read_foodb_compound(path = "./objpos_extract")
+#foodb_database <- convert_foodb2metid(data = data, path = "./objpos_extract")
+#save(foodb_database, file = "./objpos_extract/foodb_database")
+#save(foodb_database, file = "./objneg_extract/foodb_database")
+p21  <- eval(parse(text = paste0("identify_metabolites_params(",paste(pos_params, collapse = ""), ",
+                                 database = 'foodb_database')")))
+p22  <- eval(parse(text = paste0("identify_metabolites_params(",paste(neg_params, collapse = ""), ",
+                                 database = 'foodb_database')")))
+
+#download_bigg_universal_metabolite(path = ".", sleep = 1)
+
+getwd()
+#poslist <- list(p3 = p3,p7 = p7)
+### p1 with chebi to the back or we get no ms2 alignments since chebi is ms1 db
+setwd("/Users/apulvino/cecal_metabolomics/objpos_extract")
+knitr::opts_chunk$set(root.dir = '/Users/apulvino/cecal_metabolomics/objpos_extract')
+annoRes_pos <- identify_metabolite_all(
+                        ms1.data = "variable_info.csv",
+                        ms2.data = "pos_ms2_data_1.mgf",
+                        parameter.list = c(p3, p5, p7, p9, p17, p1, p11, p13, p15, p19, p21 ),
+                        path = "/Users/apulvino/cecal_metabolomics/objpos_extract/")
+annotation_table_pos <- lapply(seq_along(annoRes_pos), function(i) {
+  result <- tryCatch({
+    df <- get_identification_table(annoRes_pos[[i]], type = "new", candidate.num = 5L)
+    if (!is.null(df)) {
+      df <- dplyr::filter(df, !is.na(Compound.name), Total.score >= 0.9)
+      df$Level <- i
+      df$na_freq <- NA
+      as.data.frame(df, stringsAsFactors = FALSE)
+    } else {
+      NULL
+    }
+  }, error = function(e) NULL)
+  
+  result
+})
+annotation_table <- annotation_table_pos[!sapply(annotation_table_pos, is.null)] %>% 
+  dplyr::bind_rows(.) %>%
+  dplyr::rename(
+    variable_id = name,
+    ms2_spectrum_id = MS2.spectra.name
+  ) %>%
+  dplyr::mutate(ms2_files_id = NA)
+object_pos3 <- mutate_annotation_table(object_pos3, annotation_table)
+
+
+
+
+```
+
+
+```{r}
+
+
+#neglist <- list(p4 = p4,p8= p8)
+### p2 with chebi to the back or we get no ms2 alignments since chebi is ms1 db
+knitr::opts_chunk$set(root.dir = '/Users/apulvino/cecal_metabolomics/objneg_extract')
+annoRes_neg <- identify_metabolite_all(
+                        ms1.data = "variable_info.csv",
+                        ms2.data = "neg_ms2_data_1.mgf",
+                        parameter.list = c(p18, p4, p6, p8, p10, p12, p14, p16, p20, p22),
+                        path = "/Users/apulvino/cecal_metabolomics/objneg_extract/")
+
+# Generate neg annotation table
+annotation_table_neg <- lapply(seq_along(annoRes_neg), function(i) {
+  tryCatch({
+    df <- get_identification_table(annoRes_neg[[i]], type = "new", candidate.num = 5L)
+    if (!is.null(df)) {
+      df <- dplyr::filter(df, !is.na(Compound.name), Total.score >= 0.9)
+      df$Level <- i
+      df$na_freq <- NA
+      as.data.frame(df, stringsAsFactors = FALSE)
+    } else {
+      NULL
+    }
+  }, error = function(e) NULL)
+})
+
+# Remove NULLs and bind
+annotation_table <- annotation_table_neg[!sapply(annotation_table_neg, is.null)] %>%
+  dplyr::bind_rows() %>%
+  dplyr::rename(
+    variable_id = name,
+    ms2_spectrum_id = MS2.spectra.name
+  ) %>%
+  dplyr::mutate(ms2_files_id = NA)
+
+# Update correct object
+object_neg3 <- mutate_annotation_table(object_neg3, annotation_table)
+
+
+```
+
+```{r, prev. annotation method}
+
+# ######### combine annotations for pos mode
+# annotation_table1 <- get_identification_table(annoRes_pos[[1]], type = "new", candidate.num = 1) %>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 1, stringsAsFactors = FALSE)
+# annotation_table1$na_freq <- NA
+# annotation_table2 <- get_identification_table(annoRes_pos[[2]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 2, stringsAsFactors = FALSE)
+# annotation_table3 <- get_identification_table(annoRes_pos[[3]], type = "new", candidate.num = 1)%>%
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 3, stringsAsFactors = FALSE)
+# annotation_table4 <- get_identification_table(annoRes_pos[[4]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 4, stringsAsFactors = FALSE)
+# annotation_table5 <- get_identification_table(annoRes_pos[[5]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 5, stringsAsFactors = FALSE)
+# annotation_table6 <- get_identification_table(annoRes_pos[[6]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 6, stringsAsFactors = FALSE)
+# annotation_table7 <- get_identification_table(annoRes_pos[[7]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 7, stringsAsFactors = FALSE)
+# annotation_table8 <- get_identification_table(annoRes_pos[[8]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 8, stringsAsFactors = FALSE)
+# 
+# annotation_table2 <- annotation_table2 %>% 
+#   dplyr::filter(!(name %in% annotation_table1$name))
+# annotation_table <- rbind(annotation_table1, annotation_table2)
+# annotation_table3 <- annotation_table3 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table3)
+# annotation_table4 <- annotation_table4 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table4)
+# annotation_table5 <- annotation_table5 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table5)
+# annotation_table6 <- annotation_table6 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table6)
+# annotation_table7 <- annotation_table7 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table7)
+# annotation_table8 <- annotation_table8 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table8)
+# 
+# 
+# annotation_table <- annotation_table %>% rename(variable_id = name,
+#                             ms2_spectrum_id = MS2.spectra.name)
+# annotation_table$ms2_files_id <- NA
+# object_pos3 <- mutate_annotation_table(object_pos3, annotation_table)
+# 
+# 
+# ######## you can see we run into a couple of errors here but this is no problem -- our positive scan data did not align to any of the positive scan annotations from the fiehn database
+# ####### we don get some hits when we run the negative scans below so we'll take that/what we can get, and move on from here.
+# 
+# ######### combine annotations for neg mode
+# annotation_table1 <- get_identification_table(annoRes_neg[[1]], type = "new", candidate.num = 1) %>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 1, stringsAsFactors = FALSE)
+# annotation_table1$na_freq <- NA
+# annotation_table2 <- get_identification_table(annoRes_neg[[2]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 2, stringsAsFactors = FALSE)
+# annotation_table3 <- get_identification_table(annoRes_neg[[3]], type = "new", candidate.num = 1)%>%
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 3, stringsAsFactors = FALSE)
+# annotation_table4 <- get_identification_table(annoRes_neg[[4]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 4, stringsAsFactors = FALSE)
+# annotation_table5 <- get_identification_table(annoRes_neg[[5]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 5, stringsAsFactors = FALSE)
+# annotation_table6 <- get_identification_table(annoRes_neg[[6]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 6, stringsAsFactors = FALSE)
+# annotation_table7 <- get_identification_table(annoRes_neg[[7]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 7, stringsAsFactors = FALSE)
+# annotation_table8 <- get_identification_table(annoRes_neg[[8]], type = "new", candidate.num = 1)%>% 
+#   dplyr::filter(!is.na(Compound.name)) %>%
+#   data.frame(., Level = 8, stringsAsFactors = FALSE)
+# 
+# annotation_table2 <- annotation_table2 %>% 
+#   dplyr::filter(!(name %in% annotation_table1$name))
+# annotation_table <- rbind(annotation_table1, annotation_table2)
+# annotation_table3 <- annotation_table3 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table3)
+# annotation_table4 <- annotation_table4 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table4)
+# annotation_table5 <- annotation_table5 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table5)
+# annotation_table6 <- annotation_table6 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table6)
+# annotation_table7 <- annotation_table7 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table7)
+# annotation_table8 <- annotation_table8 %>% 
+#   dplyr::filter(!(name %in% annotation_table$name))
+# annotation_table <- rbind(annotation_table, annotation_table8)
+# 
+# 
+# annotation_table <- annotation_table %>% rename(variable_id = name,
+#                             ms2_spectrum_id = MS2.spectra.name)
+# annotation_table$ms2_files_id <- NA
+# object_neg3 <- mutate_annotation_table(object_neg3, annotation_table)
+# 
+
+
+```
+
+
+
+```{r}
+
+View(extract_annotation_table(object = object_pos3))
+variable_info_pos <- extract_variable_info(object = object_pos3)
+head(variable_info_pos)
+table(variable_info_pos$Level)
+table(variable_info_pos$Database)
+
+
+```
+
+
+## Statistical Analysis
+We start by removing features with no annotations
+
+```{r }
+
+## remove features without annotations
+object_posFilt <- 
+  object_pos3 %>% 
+  activate_mass_dataset(what = "annotation_table") #%>% 
+  filter(!is.na(Level)) #%>% 
+  #filter(Level == 1 | Level == 2)
+#object_posFilt@annotation_table$mode <- "pos"
+#View(object_posFilt@annotation_table)
+#View(extract_annotation_table(object = object_posFilt))
+
+object_negFilt <- 
+  object_neg3 %>% 
+  activate_mass_dataset(what = "annotation_table") %>% 
+  filter(!is.na(Level)) #%>% 
+  #filter(Level == 1 | Level == 2)
+#object_negFilt@annotation_table$mode <- "neg"
+#View(object_negFilt@annotation_table)
+#View(extract_annotation_table(object = object_negFilt))
+
+
+### we need to merge positive and negative mode data as one mass_dataset class
+object <- merge_mass_dataset(x = object_pos3,
+                   y = object_neg3,
+                   sample_direction = "inner",
+                   variable_direction = "full",
+                   sample_by = "sample_id",
+                   variable_by = "variable_id"
+)
+# object_combined <- rbind_mass_dataset(x = object_posFilt,
+#                                       y = object_negFilt)
+### Remove the redundant annotated metabolites bases on Level and score.
+object <-
+  object %>%
+  activate_mass_dataset(what = "annotation_table") %>%
+  group_by(Compound.name) %>%
+  #filter(Level == min(Level)) %>%
+  #filter(SS == max(SS)) %>%
+  slice_head(n = 1)
+View(object@annotation_table)
+
+## the core had identified 232 compounds with ms2 scans or standard validation
+
+
+## have just saved the one that's had the outliers removed from pos (see above)
+save(object, file = "/Users/apulvino/cecal_metabolomics/stat_analysis/object")
+
+
+```
+
+
+
+
+
+
+
+
+
