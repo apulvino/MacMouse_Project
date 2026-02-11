@@ -1,16 +1,12 @@
 #!/usr/bin/env Rscript
 
-# ===========================
-# 0. Libraries
-# ===========================
+###package load up
 library(lavaan)
 library(dplyr)
 library(iterators)
 library(itertools)
 
-# ===========================
-# 1. Load & Prepare Data
-# ===========================
+######read files in for mediation
 microbe_df <- readRDS("X1.rds")
 cecum_df   <- readRDS("X2.rds")
 serum_df   <- readRDS("X3.rds")
@@ -44,9 +40,9 @@ microbe_df <- prep_block(microbe_df, "microbe")
 cecum_df   <- prep_block(cecum_df, "cecum")
 serum_df   <- prep_block(serum_df, "serum")
 
-# ===========================
-# 2. Block Filters
-# ===========================
+##### keyword filters for block results will not include all feature ofc this is just a "scrape"/massive survey of potential features of interest
+###### as they fit w/proposed hypothesis developed on the tails of independent omic analyses... you can see we aim to extract carbo-group including compounds across metabolomes,
+#### and same for those in serum with the addition of sulf to try and grab any sulfated compounds to test then liver gene blocks
 block_filters <- list(
   microbe = c("microbe_Bacteroides_thetaiotaomicron","scindens","symbiosum","sulf"),
   cecum   = c("carb","mannitol","buty","buta","propa","propi","sterol","chol","sacch","ose"),
@@ -56,13 +52,13 @@ block_filters <- list(
   liverC  = c("Rxr","Nr1h3","Nr1h4","Nr1i3","Nr1i2","Retsat","Rbp1"),
   liverD  = c("Cebp","Fasn","Acaca","Acacb","Sreb","Klf","Sreb","Fabp","Scd1","Acly","Slc27a5","Cidec","Adipoq", "Ppar", "Stat5", "Gpd1")
 )
-
+#### helper to extract and partition subsets of features from liver block
 filter_block <- function(df, patterns, prefix){
   cols <- grepl(paste(patterns, collapse="|"), colnames(df), ignore.case=TRUE)
-  if(!any(cols)) stop(paste0("❌ No features found for ", prefix))
+  if(!any(cols)) stop(paste0("None such features found for ", prefix))
   prep_block(df[, cols, drop=FALSE], prefix)
 }
-
+########exec
 liverA <- filter_block(liver_df, block_filters$liverA, "liverA")
 liverB <- filter_block(liver_df, block_filters$liverB, "liverB")
 liverC <- filter_block(liver_df, block_filters$liverC, "liverC")
@@ -80,7 +76,7 @@ block_to_features <- list(
   liverC  = colnames(liverC),
   liverD  = colnames(liverD)
 )
-
+######## helper to make sure we define partitioning of features per block
 get_features <- function(block){
   feats <- block_to_features[[block]]
   patterns <- block_filters[[block]]
@@ -91,9 +87,7 @@ get_features <- function(block){
   feats
 }
 
-# ===========================
-# 3. Path templates
-# ===========================
+##### defining microbe to host path schema to test features from each block subset across
 all_paths <- list(
   c("microbe","cecum","serum","liverA","liverB", "liverD"),
   c("microbe","cecum","serum","liverA","liverB","liverC","liverD"),
@@ -105,14 +99,12 @@ build_sem_syntax <- function(path_nodes){
   paste0(paste0(path_nodes[-1], " ~ ", path_nodes[-length(path_nodes)]), collapse="\n")
 }
 
-# ===========================
-# 4. SEM fitting + streaming
-# ===========================
+########## FIt SEM MOdels and stream output
 fit_and_extract <- function(feature_path, data, bootstrap_n=50, outfile=NULL){
-  # Validate directional path
+  #m### Make sure paths are directionally coherent prior to run
   block_order <- sapply(strsplit(feature_path, "_"), `[`, 1)
   if(!any(sapply(all_paths, function(vp) identical(block_order, vp[seq_along(block_order)])))){
-    message("⚠️ Skipping invalid path: ", paste(feature_path, collapse=" > "))
+    message("Invalid path, gonna skip: ", paste(feature_path, collapse=" > "))
     return(NULL)
   }
 
@@ -121,13 +113,16 @@ fit_and_extract <- function(feature_path, data, bootstrap_n=50, outfile=NULL){
   fit <- tryCatch(
     sem(sem_syntax, data=data, se="bootstrap", bootstrap=bootstrap_n),
     error=function(e){
-      message("⚠️ SEM failed for path (truncated): ", substr(paste(feature_path, collapse=" > "),1,120))
+      message("SEM failed for path: ", substr(paste(feature_path, collapse=" > "),1,120))
       return(NULL)
     }
   )
 
   if(is.null(fit)) return(NULL)
-
+######## here we try to cast a bit of a biological context / whether a test falls into hypertroph/hyperplas...
+  ######### this is super crude way to partition is sort of just a way to have a first look at POTENTIAL associations
+######### likely not aaaaaaas useful to do this level of characterization as opposed to just reporting significant mediating microbe-to-host feature sets
+######### doesn't hurt to ignore it after writing though, doesn't necessarily have to be removed for that reason so just leaving it for posterity...
   out <- tryCatch(
     parameterEstimates(fit, standardized=TRUE) %>%
       dplyr::filter(op=="~") %>%
@@ -154,38 +149,36 @@ fit_and_extract <- function(feature_path, data, bootstrap_n=50, outfile=NULL){
   out
 }
 
-# ===========================
-# 5. Iterate over all path templates (with progress, split by job)
-# ===========================
+########### ITerate over path templates write message out per iter
 array_id <- as.numeric(Sys.getenv("SLURM_ARRAY_TASK_ID", unset=1))
 n_jobs   <- as.numeric(Sys.getenv("SLURM_ARRAY_TASK_COUNT", unset=1))
 output_file <- paste0("mini_path_table_chunk_", array_id, ".csv")
-
-progress_interval <- 50  # how often to log
+##### log ev 50 iters
+progress_interval <- 50
 
 for(path_blocks in all_paths){
-  # Get filtered features per block
+  ######### filtered feature logged per block
   features_list <- lapply(path_blocks, get_features)
   
-  # Skip if any block is empty
+  ########## skip empty blocks/print message about empties case to log for posterity can be nice
   if(any(sapply(features_list, length) == 0)){
-    cat("⚠️ Skipping template due to empty block(s):",
+    cat("Skipping template due to empty block(s):",
         paste(path_blocks[sapply(features_list,length)==0], collapse=", "), "\n")
     next
   }
   
-  # Print block sizes
-  cat("\n🚀 Processing template:", paste(path_blocks, collapse=" > "), "\n")
-  for(i in seq_along(path_blocks)){
-    cat("   ", path_blocks[i], ":", length(features_list[[i]]), "features\n")
-  }
+  ######## identify size of block... interesting but not necessary for model run
+  #cat("\nProcess template:", paste(path_blocks, collapse=" > "), "\n")
+  #for(i in seq_along(path_blocks)){
+  #  cat("   ", path_blocks[i], ":", length(features_list[[i]]), "features\n")
+  #}
   
-  # All combinations
-  combos <- expand.grid(features_list, stringsAsFactors=FALSE)
-  total_combos <- nrow(combos)
-  cat("   Total feature combinations for this template:", total_combos, "\n")
+  ###### sort of fine to keep around but a bit ancillary idk thought it coulddd dbet interesting at first
+  #combos <- expand.grid(features_list, stringsAsFactors=FALSE)
+  #total_combos <- nrow(combos)
+  #cat("   Total feature combinations for this template:", total_combos, "\n")
   
-  # Split work across SLURM array jobs
+  # ######## will split job if your .sh is submitted as array as in example see .sh for details
   rows_per_job <- ceiling(total_combos / n_jobs)
   start_row <- (array_id - 1) * rows_per_job + 1
   end_row   <- min(array_id * rows_per_job, total_combos)
@@ -205,7 +198,7 @@ for(path_blocks in all_paths){
     }
   }
   
-  cat("✅ Finished template:", paste(path_blocks, collapse=" > "), 
+  cat("Finished template:", paste(path_blocks, collapse=" > "), 
       "- total rows written for this job:", rows_written, "\n")
 }
 
