@@ -1,0 +1,1681 @@
+---
+title: "combed4nDIABLO"
+output: html_document
+date: "2025-09-03"
+---
+
+## load packages
+
+```{r }
+
+library(CCA)
+library(ggplot2)
+library(ggtext)
+library(ggrepel)
+library(vegan)
+#BiocManager::install("sRDA")
+library(sRDA)
+library(stringr)
+library(tibble)
+#devtools::install_github("mixOmicsTeam/mixOmics")
+library(mixOmics)
+library(ggraph)
+library(dplyr)
+library(data.table)
+library(tidyr)
+library(stringr)
+library(tibble)
+#BiocManager::install("biomaRt")
+library(biomaRt)
+library(readr)
+library(purrr)
+library(igraph)
+#install.packages("ggExtra")
+library(ggExtra)
+
+
+# (to get multi-block correlation- and dim reduction plots, a loadings plot, and 2 network plots)
+
+```
+
+## curating/pre-processing
+
+```{r, data preparation }
+
+set.seed(123)
+### See 3nMicrobeCecumSerum.Rmd for blocks of code used to generate these objects
+# diff abundant metabolites and microbes
+#HsMmSb_MouseRNAseq.Rmd blocks 1-2 is where this file was first created
+result.metabomat_microbe <- data.frame(data.table::fread("clippedMicro.csv", sep = ","))
+rownames(result.metabomat_microbe) <- result.metabomat_microbe$V1
+result.metabomat_microbe$V1 <- NULL
+result.metabomat_microbe$samples <- NULL
+result.metabomat_microbe <- t(result.metabomat_microbe)
+###### FILTERRRRRRRR
+# result.metabomat_microbe <- result.metabomat_microbe[, grep("Bactero|Lachnospi|Oscillo|Sphingo|Clostrid",
+#                                                             colnames(result.metabomat_microbe),
+#                                                             value = TRUE)]
+### we can go back and quickly re-run the corncob models in cecal_shotgun.Rmd, then subset data.clr columns by the mutual taxa from pw compare corncob models against macaque-donor
+# colFilter <- c(fdr_corncob_humac,fdr_corncob_sqmac)
+# #colFilter <- intersect(fdr_corncob_humac,fdr_corncob_sqmac)
+# colFilter <- gsub("\\|", ".", colFilter)
+# filtered_mat <- result.metabomat_microbe[rownames(result.metabomat_microbe) %in% colFilter, ]
+# result.metabomat_microbe <- filtered_mat
+# ### OR we can try this microbiome mixMC pre-processing
+# data.offset <- result.metabomat_microbe + 1
+# sum(which(data.offset == 0))
+# #data.filter <- t(result.filter$data.filter)
+# data.filter <- t(data.offset)
+# # #lib size not an issue for our samples; so we can move to PCA
+# # ###### double check that low count removal/pseudocount is sufficient to get diablo to take
+# pca.result <- pca(data.filter, logratio = 'CLR')
+# sampd <- data.frame(sample = rownames(pca.result$X),
+#             group = substr(rownames(pca.result$X), start = 1, stop = 3))
+# # plotIndiv(pca.result,  # plot samples
+# #           group = sampd$group,
+# #           title = '',
+# #           legend = TRUE)
+# data.clr <- logratio.transfo(data.filter,
+#                              logratio = 'CLR', offset = 0)
+# plotIndiv(pca(data.clr),  # plot samples
+#           group = sampd$group,
+#           title = 'group-wise microbiome sample dist w/CLR',
+#           legend = TRUE)
+# 
+# # ### may need to perform another filter on this if spls stdev remains zero and downstream work reveals no enrichment for taxa or for taxa that make little sense in bio-context
+# result.metabomat_microbe <- data.clr
+
+result.metabomat_liver <- data.frame(data.table::fread("clippedGene.csv", sep = ","))
+rownames(result.metabomat_liver) <- result.metabomat_liver$V1
+result.metabomat_liver$V1 <- NULL
+result.metabomat_liver$samples <- NULL
+colnames(result.metabomat_liver) <- c("sqm10","sqm12","hum22","mac4","mac3","hum24","sqm16","mac1",
+  "sqm13","hum19","sqm17","mac5","sqm15","hum23","hum20",
+  "hum21","mac6","mac8","hum25","sqm18","sqm9","mac2",
+  "mac7","hum26","sqm14","sqm11")
+#MetabolomicsFinalReport.Rmd block 1 is where this file was first created
+## commenting out the total.score filtering after reading in metabolomic data given diablo is responsible for feature selection
+## as well as interdataset corr in this analysis and slice_max which picks an annotated compound if it has the same variable_id by which has the highest total score...
+## which is not a bad idea for feature selection to weed out unlikely annotations but we want to let diablo handle this 
+result.metabomat_cecum <- readr::read_csv("clippedCecum.csv") #%>% filter(Total.score > 0.99)
+result.metabomat_cecum <- result.metabomat_cecum %>%
+  group_by(variable_id) %>%
+  filter(Total.score > 0.9 & mz.match.score > 0.99) %>% 
+  #slice_max(Total.score, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  column_to_rownames("Compound.name")
+result.metabomat_cecum <- result.metabomat_cecum[, grep("Ben.Oli", colnames(result.metabomat_cecum))]
+colnames(result.metabomat_cecum) <- c("mac1","mac2","mac3","mac4","mac5","mac6","mac7","mac8",
+                                      "sqm9", "sqm10","sqm11", "sqm12","sqm13", "sqm14","sqm15", "sqm16","sqm17", "sqm18",
+                                      "hum19","hum20","hum21","hum22","hum23","hum24","hum25","hum26")
+# result.metabomat_cecum <- result.metabomat_cecum[grep("cholic|cholest|cholate|cholan|phospho|bili",
+#                                                             rownames(result.metabomat_cecum),
+#                                                             value = TRUE), ]
+#MetabolomicsFinalReport_serum.Rmd block 1 is where this file was first created 
+result.metabomat_serum <- readr::read_csv("clippedSerum.csv") #%>% filter(Total.score > 0.99)
+result.metabomat_serum <- result.metabomat_serum %>% 
+  group_by(variable_id) %>%
+  filter(Total.score > 0.9 & mz.match.score > 0.99) %>% 
+  #slice_max(Total.score, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  column_to_rownames("Compound.name")
+result.metabomat_serum <- result.metabomat_serum[, grep("Ben.Ant", colnames(result.metabomat_serum))]
+colnames(result.metabomat_serum) <- c("mac1","mac2","mac3","mac4","mac5","mac6","mac7","mac8",
+                                     "sqm10","sqm11", "sqm12","sqm13", "sqm16","sqm17", "sqm18",
+                                      "hum19","hum20","hum21","hum22","hum23","hum24")
+## FIX: ENSEMBL GENE ID into GENE NAMES
+mart <- useDataset("mmusculus_gene_ensembl", useMart("ensembl"))
+opts <- listAttributes(mart)
+bridge <- getBM(filters = "ensembl_gene_id",
+               attributes = c("ensembl_gene_id","external_gene_name"),
+               values = rownames(result.metabomat_liver),
+               mart = mart)
+result.metabomat_liver$ensembl_gene_id <- rownames(result.metabomat_liver)
+result.metabomat_liver <- merge(bridge, result.metabomat_liver, by = "ensembl_gene_id")
+result.metabomat_liver$ensembl_gene_id <- NULL
+#remove rows that have an empty string in slot external_gene_name
+result.metabomat_liver <- result.metabomat_liver[result.metabomat_liver$external_gene_name != "", ]
+rownames(result.metabomat_liver) <- result.metabomat_liver$external_gene_name
+result.metabomat_liver$external_gene_name <- NULL
+# result.metabomat_liver <- result.metabomat_liver[grep("Cyp|Fgf|lotho|Shp|Hnf|Lrh|Nrf|Abcg|Slc10",
+#                                                             rownames(result.metabomat_liver),
+#                                                             value = TRUE), ]
+
+### get liver RNAseq sig hits; Going to try without making subsets or doing much filtering first
+### this may help reduce any unforseen overfitting problems or biasing input feature sets
+### if things look weird on this go around without filtering we can come back and toy with some filtering maybe
+# livermat_1 <- dds@assays@data@listData[["counts"]]
+# #livermatsig_1 <- data.frame(subset(livermat_1, rownames(livermat_1) %in% rownames(res.05)))
+# # to get only DE counts
+# livermatsig_1 <- data.frame(subset(livermat_1, rownames(livermat_1) %in% rownames(resSig)))
+
+#X1 <- t(result.metabomat_microbe)
+X1 <- result.metabomat_microbe
+# run the below ONLY ONCE BUT DO MAKE SURE YOU RUN IT
+colnames(X1) <- sub(".*s__", "", colnames(X1))
+X2 <- t(result.metabomat_cecum)
+X3 <- t(result.metabomat_serum)
+X4 <- t(result.metabomat_liver)
+
+# order so rows in dataframes match one another
+X1 <- X1[match(rownames(X3), rownames(X1)), ] %>% na.omit()
+X2 <- X2[match(rownames(X1), rownames(X2)), ] %>% na.omit()
+X3 <- X3[match(rownames(X1), rownames(X3)), ] %>% na.omit()
+X4 <- X4[match(rownames(X3), rownames(X4)), ]
+
+Y <- as.factor(gsub("[[:digit:]]+", "", rownames(X1)))
+
+# X1 <- scale(log1p(X1 / rowSums(X1)))
+# X2 <- scale(log1p(X2))
+# X3 <- scale(log1p(X3))
+# X4 <- scale(log1p(X4))
+
+data_blocks <- list(microbe = X1,
+                 cecum = X2,
+                 serum = X3,
+                 liver = X4)
+
+##### pw comparison setup
+##### sqm vs. mac
+# data.smm <- lapply(data, function(m) {
+#   m[Reduce(intersect,
+#            lapply(data, function(mm) rownames(mm[grep("sqm|mac", rownames(mm)), , drop = FALSE]))
+#            ),,drop = FALSE]
+#   }
+# )
+# #### hum vs. mac
+# data.hsm <- lapply(data, function(m) {
+#   m[Reduce(intersect,
+#            lapply(data, function(mm) rownames(mm[grep("hum|mac", rownames(mm)), , drop = FALSE]))
+#            ),,drop = FALSE]
+#   }
+# )
+#data_list <- list(data.smm,data.hsm)
+#names(data_list) <- c("data.smm", "data.hsm")
+
+#lapply(data_list$data.smm, dim)
+
+data_list <- list(data_blocks)
+names(data_list) <- c("data")
+lapply(data_list$data, dim)
+
+
+```
+
+
+## model preparation for integration
+
+```{r, design model}
+
+# library(BiocParallel)
+# 
+# for (nm in names(data_list)) {
+#   
+#   data <- data_list[[nm]]
+#   
+#   ## initialize design matrix
+#   design <- matrix(0.1, ncol = length(data), nrow = length(data), 
+#                    dimnames = list(names(data), names(data)))
+#   diag(design) <- 0
+#   
+#   ### intersect sample/rownames across blocks
+#   tograb <- Reduce(intersect, list(rownames(data$microbe),
+#                                    rownames(data$liver),
+#                                    rownames(data$serum), 
+#                                    rownames(data$cecum)))
+#   data$serum   <- data$serum[tograb, ]
+#   data$microbe <- data$microbe[tograb, ]
+#   data$liver   <- data$liver[tograb, ]
+#   data$cecum   <- data$cecum[tograb, ]
+#   
+#   ### aware of all three groups at one
+#   Y <- as.factor(gsub("[[:digit:]]+", "", rownames(data$serum)))
+#   ### aware of macaque-donor distinctness
+#   #Y <- factor(ifelse(gsub("[[:digit:]]+", "", rownames(data$serum)) == "mac", "fat", "normal_wt"))
+#   
+#   # initialize first tester DIABLO model
+#   basic.diablo.model <- block.splsda(X = data, Y = Y, ncomp = 2, design = design)
+#   
+#   # model fit evaluation
+#   perf.diablo <- perf(basic.diablo.model, validation = 'loo', 
+#                       folds = 10, nrepeat = 5, progressBar = TRUE,
+#                       BPPARAM = MulticoreParam(workers = 4))
+#   
+#   ## select the optimal component
+#   ncomp <- perf.diablo$choice.ncomp$WeightedVote["Overall.BER", "centroids.dist"]
+#   #liver = c(5:9, seq(10, 18, 2), seq(20,30,5)))
+#   # test grid for tuning, the following grid had lowest corr at 0.91 (cecum-serum), every other inter-dataset corr was HIGHER than 0.91 !!
+#   #             list(microbe = 218, 
+#   #                  cecum = 535,
+#   #                  serum = 387,
+#   #                  liver = 723)
+#   # test grid for tuning, the following grid had lowest corr at 0.92 (cecum-serum), every other inter-dataset corr was HIGHER than 0.92 !!
+#               # list(microbe = 20, 
+#               #      cecum = 50,
+#               #      serum = 50,
+#               #      liver = 70)
+#   test.keepX <- list(
+#     microbe = c(10, 15, 20),
+#     cecum   = c(10, 15, 20),
+#     serum   = c(5, 10, 15),
+#     liver   = c(5, 7, 10)
+#   )
+#   # tune model
+#   tuned_model <- tune.block.splsda(
+#     X = data, Y = Y,
+#     ncomp = ncomp, test.keepX = test.keepX,
+#     design = design, validation = 'loo',
+#     folds = 10, nrepeat = 5, dist = "centroids.dist"#,
+#     #BPPARAM = MulticoreParam(workers = 4)
+#   )
+#   
+#   assign(paste0("tune.TCGA_", nm), tuned_model)
+#   assign(paste0("choice.keepX_", nm), tuned_model$choice.keepX)
+#   
+#   # build final model with optimal keepX
+#   final_model <- block.splsda(
+#     X = data, Y = Y, ncomp = 2, 
+#     keepX = tuned_model$choice.keepX,
+#     design = design
+#   )
+#   
+#   assign(paste0("final.diablo.model_", nm), final_model)
+# }
+# 
+# # tune.TCGA = tune.block.splsda(X = data, Y = Y, 
+# #                                   ncomp = ncomp, test.keepX = test.keepX, 
+# #                                   design = design, validation = 'loo',
+# #                                   folds = 5, nrepeat = 1, dist = "centroids.dist"
+# #                                   #BPPARAM = BiocParallel::MulticoreParam(workers = parallel::detectCores()-1)
+# #                               )
+# 
+# wv_row <- perf.diablo$choice.ncomp$WeightedVote["Overall.BER", ]
+# 
+# result <- if(length(unique(wv_row)) == 1) {
+#   "centroids.dist"          #centroids.dist if all are tied
+# } else {
+#   names(wv_row)[which.max(wv_row)]  #otherwise winner dist metric used
+# }
+# 
+# #write_rds(final.diablo.model_data, "recmodel.Rds")
+
+```
+
+
+## dimenstionality reduction, interdataset corr., and loadings
+
+```{r}
+
+final.diablo.model_data <- readRDS("recmodel.Rds")
+#PAPER 1
+#c("#1b9e77", "#a6761d", "#666666"))
+
+
+# Capitalize names
+
+levels(final.diablo.model_data$Y) <- tools::toTitleCase(levels(final.diablo.model_data$Y))
+
+# Define corrected block names
+corrected_names <- c("Microbiome", "Cecal Metabolome", "Serum Metabolome", "Liver Transcriptome")
+
+# Update block labels
+final.diablo.model_data$names$blocks <- corrected_names
+
+# Update names of colnames list
+names(final.diablo.model_data$names$colnames)[1:4] <- corrected_names
+
+# Update names of all top-level slots that use block names
+
+slots_to_update <- c("X", "variates", "loadings", "explained_variance", "ind")
+
+for (slot in slots_to_update) {
+  if (!is.null(final.diablo.model_data[[slot]])) {
+    current_names <- names(final.diablo.model_data[[slot]])
+    n <- length(current_names)
+    
+    # Only rename if there are at least 4 elements
+    if (n >= 4) {
+      names(final.diablo.model_data[[slot]])[1:4] <- corrected_names
+    }
+  }
+}
+
+names(final.diablo.model_data$ncomp)[1:4] <- corrected_names
+
+#S5A
+
+jpeg("plotDIAB.jpeg", units="in", height = 10, width= 15, res=300)
+
+#set plotting parameters
+
+par(cex = 14,       # global scaling (affects most text)
+    cex.lab = 1,   # axis label size
+    font.lab = 2,    # bold axis labels
+    cex.axis = 1.3, # tick label size
+    ps=21
+    ) 
+
+
+
+plotDiablo(final.diablo.model_data,
+           ncomp = 1,
+           col.per.group = c("#1b9e77", "#a6761d", "#666666"),
+          size.title = 22,
+          size.subtitle = 22,
+          size.axis = 1,
+          size.legend = 28,
+          size.legend.title = 22,
+          font= 2
+)
+
+
+dev.off()
+
+
+#S5B
+
+jpeg("plotINDIV.jpeg", units="in", height = 10, width= 15, res=300)
+
+
+plot9 <- plotIndiv(final.diablo.model_data,
+          ind.names = FALSE,
+          legend = TRUE,
+          title =,
+  subtitle = c("Microbiome", "Cecal Metabolome", "Serum Metabolome", "Liver Transcriptome"),
+          col = c("#1B9E77", "#A6761D", "#666666"),
+          legend.title = "Species",       #  legend
+          legend.font = 2,    # Bold legend
+          cex = 4,              # Increase axis and label text
+          size.title = 24,
+          size.subtitle = 18,
+          size.xlabel = 22,
+          size.ylabel = 22,
+          size.axis = 19,
+          size.legend = 22,
+          size.legend.title = 22,
+          X.label = "Variate 1",
+          Y.label = "Variate 2",
+          font = 2                # Bold axis labels
+)
+ 
+plot(plot9$graph)+ removeGrid()
+
+dev.off()
+
+## forgoing
+# plotArrow(final.diablo.model_data, ind.names = FALSE, legend = TRUE, 
+#           title = 'DIABLO', col = c("#1b9e77", "#a6761d", "#666666"))
+# plotVar(final.diablo.model_data, var.names = FALSE, 
+#         style = 'graphics', legend = TRUE,
+#         pch = c(16, 17, 15, 18), cex = c(2,2,2,2), 
+#         col = c('darkorchid', 'brown1', 'lightgreen', 'blue'))
+## PAPER 1
+
+#S5B
+
+#replace _ with "
+
+cleaned_names <- colnames(final.diablo.model_data$X$Microbiome) %>%
+  stringr::str_replace_all("_", " ")
+
+colnames(final.diablo.model_data$X$Microbiome) <- cleaned_names
+rownames(final.diablo.model_data$loadings$Microbiome) <- cleaned_names
+
+
+jpeg("loadings4nclip.jpeg", units = "in", height = 15, width = 25, res = 300)
+
+#apply preplotting functions
+
+
+layout(
+  matrix(c(1, 5, 2,
+           3, 5, 4), nrow = 2, byrow = TRUE),
+  widths = c(1, 0.3, 1)  
+)
+
+par(oma = c(0, 42.4, 1, 0))
+par(mar = c(5, 65, 4, 2), lwd = 2, font.axis = 2, font.lab = 2, font = 2)
+
+#plot
+plotLoadings(
+  final.diablo.model_data,
+  comp = 1,
+  contrib = 'max',
+  method = 'median',
+  legend.color = c("#1b9e77", "#a6761d", "#666666"),
+  subtitle = c("Microbiome", "Cecal Metabolome", "Serum Metabolome", "Liver Transcriptome"),
+  title = NULL,
+  legend = FALSE,
+  cex.subtitle = 3,
+  size.name = 2,
+  size.title = 10,
+  size.subtitle = 4,
+  size.xlabel = 4,
+  size.ylabel = 4,
+  lwd=2,
+  size.axis = 2,
+  font = 2,
+)
+
+
+par(mar = c(0, 0, 0, 0))
+plot(1, type = "n", axes = FALSE, xlab = "", ylab = "")
+
+legend(
+  "center",
+  legend = levels(final.diablo.model_data$Y),
+  fill = c("#1b9e77", "#a6761d", "#666666"),
+  title = "Species",
+  cex = 2,
+  text.font = 2
+)
+
+#  # Top-left panel → Microbiome
+# par(mfg = c(1, 1))
+# usr <- par("usr")
+# text(x = mean(usr[1:2]), y = usr[4] - 0.035 * diff(usr[3:4]), "Microbiome", font = 2, cex = 3.4)
+# 
+# # Top-right panel → Cecal Metabolome
+# par(mfg = c(1, 2))
+# usr <- par("usr")
+# text(x = mean(usr[1:2]), y = usr[4] - 0.035 * diff(usr[3:4]), "Cecal Metabolome", font = 2, cex = 3.4)
+# 
+# 
+# # Liver Metabolome → Panel 4
+# par(mfg = c(2, 1))
+# usr <- par("usr")
+# text(x = mean(usr[1:2]), y = usr[4] - 0.03 * diff(usr[3:4]), "Liver Transcriptome", font = 2, cex = 3.4)
+# 
+# # Serum Transcriptome → Panel 3
+# par(mfg = c(1, 3))
+# usr <- par("usr")
+# text(x = mean(usr[1:2]), y = usr[4] - 0.03 * diff(usr[3:4]), "Serum Metabolome", font = 2, cex = 3.4)
+# 
+
+
+dev.off()
+
+
+
+```
+
+
+## initial diablo network 
+
+```{r}
+
+########### preliminary network projection that diablo produces from highly correlated features it identifies across blocks
+jpeg("network4nclip.jpeg", units="in", width=40, height=30, res=300)
+diablo_net <- network(final.diablo.model_data, blocks = c(1,2,3,4),
+        color.node = c('darkorchid','brown1', 'lightgreen', 'blue'), cutoff = 0.75,
+        size.node = 0.05, graph.scale = 0.1
+        )
+dev.off()
+
+
+#### but that's hard to visualize and it's not clear how those ideas fit into proposed models from independent analyses 
+############################## hypertrophy (main mechanism)  ###################################
+# B. theta’s incomplete carb ferment, causing increase incompletely fermented carb/carboxylic acid intermediates
+# These can disrupt cysteine catabolism (Cdo1 suggested in serum; Csad in transcriptome; consistent Fmo1 expr across groups – this is final conv. to taurine)
+# Incr. hypotaurine leading to potential spillover
+# increasing adipocyte uptake (Slc6a6)/Incr. Slc6a6 associated with obesity
+# Lit. says incr. hypotaurine:taurine ratio depletes B-cat for Wnt signaling (altered Wnt5a methylation bc hypotaurine?)
+# depleted B-cat reduces Wnt complex/signal forcing stem cells toward adipocyte fate via paths like Ppar (suggestion of both Wnt and Ppar in serum data)
+
+############################## hyperplasia (complementary/supportive)  ###################################
+# B. theta’s incomplete carb ferment, causing increase incompletely fermented carb/carboxylic acid intermediates
+# These can disrupt cysteine catabolism (Cdo1 suggested in serum; Csad in transcriptome; consistent Fmo1 expr across groups – this is final conv. to taurine)
+# Incr. hypotaurine leading to potential spillover
+# increasing adipocyte uptake (Slc6a6)/Incr. Slc6a6 associated with obesity
+# Lit. says incr. hypotaurine:taurine ratio depletes B-cat for Wnt signaling (altered Wnt5a methylation bc hypotaurine?)
+# depleted B-cat reduces Wnt complex/signal forcing stem cells toward adipocyte fate via paths like Ppar (suggestion of both Wnt and Ppar in serum data)
+
+
+```
+
+
+
+
+
+
+
+
+## Network 1: keyword subset network
+contains terms of interest relevant to both prev. proposed models w/o excl any terms diablo may have ID'd as highly covariable across blocks
+
+
+```{r}
+
+# # define hypothesis feature lists
+keywords <- c(
+  "Lachno", "thetaiotaomicron", "scindens", "symbiosum","hiranonis",
+  "Csad","Cdo1","Fmo1","Stra","Aldh","Rdh","Scd",
+  "Rbp","Fasn","Acaca","Elovl","Retsat","Cyp","Slc10a1","Hsd","Ctnnb1","Wnt","Ppar","Sreb","Abcb11","Sfrp1","Fzd",
+  "carb","sulf","chol","taur","oxy","stero","glucos","mann",
+  "acetyl","phos","sugar","glyco","sacch","retin","malonyl", "palmit", "steara","acyl", "olea",
+  "sialic","fucose","hexose","pentose","heptose","octulose","uronic","lactone"
+)
+
+top_features <- lapply(names(final.diablo.model_data$X), function(block) {
+  load_block <- final.diablo.model_data$loadings[[block]][, 1]   #loadings comp1
+  load_block <- load_block[!is.na(load_block)] #chuck NA
+  keep_idx <- grepl(paste(keywords, collapse = "|"), names(load_block), ignore.case = TRUE) #keyword pull
+  load_block <- load_block[keep_idx]
+  feats <- names(sort(abs(load_block), decreasing = TRUE))[1:min(30, length(load_block))] #get abs vals for loading matches + pull top 30
+  feats <- gsub(" ", "_", feats) #clean names
+  paste0(block, "_", feats)
+})
+
+##combine blocks with block-prefix feat names
+all_feats <- do.call(cbind, lapply(names(final.diablo.model_data$X), function(b) {
+  mat <- final.diablo.model_data$X[[b]]
+  colnames(mat) <- paste0(b, "_", gsub(" ", "_", colnames(mat)))  #fill spaces w/underscore
+  mat
+}))
+
+#correlation matrix across entire feature sets
+cors_mat <- cor(all_feats, use="pairwise.complete.obs", method = "spearman")
+diag(cors_mat) <- 0  #no self-corr
+selected_feats <- intersect(unlist(top_features), colnames(cors_mat))
+cors_mat <- cors_mat[selected_feats, selected_feats, drop = FALSE]
+#feature filtering by keyword gets all matches from entire dataset ends up being 200 some features
+# mod_feats <- grep(paste(keywords, collapse="|"), colnames(cors_mat),ignore.case=TRUE, value=TRUE)
+# cors_mat <- cors_mat[unique(mod_feats),
+#                      unique(mod_feats)]
+
+### thresholding for correlated features of interset (taking abs value of 0.75 so can be highly pos/neg corr.)
+edges <- which(abs(cors_mat) >= 0.75 & lower.tri(cors_mat), arr.ind=TRUE)
+g <- graph_from_edgelist(cbind(rownames(cors_mat)[edges[,1]],
+                               rownames(cors_mat)[edges[,2]]), directed=FALSE)
+E(g)$weight <- cors_mat[edges]
+
+###select colors/can update  this (colors of points for each blank)
+V(g)$block <- sapply(strsplit(V(g)$name, "_"), `[`, 1)
+
+####plot net
+ggraph(g, layout="stress") +
+  geom_edge_link(aes(color = weight), width=1) +
+  geom_node_point(aes(color = block), size=3) +
+  geom_node_text(aes(label = name), repel=TRUE, size=2) +
+  scale_edge_color_gradient2(low="blue", mid="grey", high="red", midpoint=0,
+                             name="Correlation") +
+  theme_void() +
+  theme(legend.position="right")
+
+##extract features from most connected plot
+features_largest_subgraph.key <- V(g)$name[components(g)$membership == which.max(components(g)$csize)]
+View(data.frame(features_largest_subgraph.key))
+length(features_largest_subgraph.key)
+
+
+
+```
+
+
+
+## Network 2: DIABLO id'd top features-only
+
+```{r}
+
+#### leaving only the top 30 DIABLO id'd features co-varying the most across each block
+top_features <- lapply(names(final.diablo.model_data$X), function(b) {
+  loadings_block <- final.diablo.model_data$loadings[[b]][, 1]       #comp1
+  loadings_block <- loadings_block[!is.na(loadings_block)]
+  feats <- names(sort(loadings_block, decreasing = TRUE))[1:30]      #top 30
+  feats <- gsub(" ", "_", feats)                                     #replace spaces
+  paste0(b,"_", feats)                                                   #add block prefix
+})
+names(top_features) <- names(final.diablo.model_data$X)
+
+##combine blocks with block-prefix feat names
+all_feats <- do.call(cbind, lapply(names(final.diablo.model_data$X), function(b) {
+  mat <- final.diablo.model_data$X[[b]]
+  colnames(mat) <- paste0(b, "_", gsub(" ", "_", colnames(mat)))  #fill spaces w/underscore
+  mat
+}))
+
+#correlation matrix across entire feature sets
+cors_mat3 <- cor(all_feats, use="pairwise.complete.obs", method = "spearman")
+diag(cors_mat3) <- 0  #no self-corr
+selected_feats <- intersect(unlist(top_features), colnames(cors_mat3))
+cors_mat3 <- cors_mat3[selected_feats, selected_feats, drop = FALSE]
+# cors_mat <- cor(all_feats, use="pairwise.complete.obs")
+# dimnames(cors_mat) <- lapply(dimnames(cors_mat), function(x) gsub(" ", "_", x))
+# cors_mat3 <- cors_mat[unlist(top_features) %>% as.vector(),
+#                       unlist(top_features) %>% as.vector()]
+# diag(cors_mat3) <- 0
+
+### thresholding for correlated features of interset (taking abs value of 0.75 so can be highly pos/neg corr.)
+edges <- which(abs(cors_mat3) >= 0.75 & lower.tri(cors_mat3), arr.ind=TRUE)
+g <- graph_from_edgelist(cbind(rownames(cors_mat3)[edges[,1]],
+                               rownames(cors_mat3)[edges[,2]]), directed=FALSE)
+E(g)$weight <- cors_mat3[edges]
+
+###select colors/can update  this (colors of points for each blank)
+V(g)$block <- sapply(strsplit(V(g)$name, "_"), `[`, 1)
+
+theme_bold <- theme(
+  axis.title.x = element_text(size = 22, face = "bold"),
+  axis.title.y = element_text(size = 22,face = "bold"),
+  axis.text.x = element_text(face = "bold", size = 22),
+  axis.text.y = element_text(size = 22,face = "bold"),
+  legend.title = element_text(size = 22,face = "bold"),
+  legend.text = element_text(size = 22,face = "bold"),
+  plot.title = element_text(size = 22,face = "bold"),
+  strip.text = element_text(size = 22,face = "bold"),
+  axis.line = element_line(linewidth = 3, color = "black")
+)
+
+####plot net
+ggraph(g, layout="stress") +
+  geom_edge_link(aes(color = weight), width=1) +
+  geom_node_point(aes(color = block), size=3) +
+  geom_node_text(aes(label = name), repel=TRUE, size=2) +
+  scale_edge_color_gradient2(low="blue", mid="grey", high="red", midpoint=0,
+                             name="Correlation") +
+  theme_void() +
+  theme_bold +
+  theme(legend.position="right")
+
+##extract features from most connected plot
+features_largest_subgraph.diablo <- V(g)$name[components(g)$membership == which.max(components(g)$csize)]
+print((features_largest_subgraph.diablo))
+length(features_largest_subgraph.diablo)
+#features_largest_subgraph
+
+```
+
+
+## orgaanizing collective of features
+
+I think it's kind of impressive here...
+You can use the DIABLO graph and find about a third of features in the largest, connected subgraph
+
+If you use a logical subset based on independent analysis of features 80% of those of features connect back to the suggested adipocyte hypertrophy/hyperplasia model mediated by incomplete carbohydrate fermentation and disrupted sulfur/bile metabolism
+
+```{r}
+
+library(dplyr)
+
+# Example input: a character vector of features
+##features_largest_subgraph.key
+##features_largest_subgraph.diablo
+
+adiposity_related_features <- c(
+  "liver_Slc10a1","liver_Cbs","liver_Csad","liver_Fasn","liver_Acaca","liver_Acly","liver_Fads1","liver_Fads2","liver_Gpd1",
+  "liver_Gpd2","liver_Insig2","liver_Hnf4a","liver_Igf1","liver_Cyb5r3",
+  "liver_Acaa1b","liver_Retsat",
+  "microbe_Campylobacter_sp._RM12651","microbe_Campylobacter_jejuni","microbe_Helicobacter_cinaedi",
+  "microbe_Loigolactobacillus_coryniformis",
+  "cecum_s,s-dimethyl-beta-propiothetin",
+  "cecum_diisopropyl_sulfate",
+  keywords
+)
+#keywords
+#combine, collapse name, assign mechanism, and set 'from' label
+combined_table <- bind_rows(
+    tibble(feature = features_largest_subgraph.diablo, from = "DIABLO"),
+    tibble(feature = features_largest_subgraph.key, from = "SingleOmicSelection")
+  ) %>%
+  mutate(
+    feature = gsub(" ", "_", feature),
+    mechanism = ifelse(
+      grepl(paste(adiposity_related_features, collapse = "|"), feature),
+      #"incomplete carb fermentation -> sulfur/bile disruption -> hypertrophy/hyperplasia",
+      "model coherent",
+      "Other"
+    ),
+    correlation_with_neighbors = sapply(feature, function(f) {
+      cm <- if(f %in% features_largest_subgraph.diablo) cors_mat3 else cors_mat #select corr matrix to assess dirn
+      if(!(f %in% colnames(cm))) return(NA)
+      nbrs <- cm[f, setdiff(colnames(cm), f)]  #get negighbs above 0.75,
+      nbrs <- nbrs[abs(nbrs) >= 0.75]
+      if(length(nbrs) == 0) return(NA)
+      s <- sign(nbrs)
+      if(all(s > 0)) "positive"
+      else if(all(s < 0)) "negative"
+      else "both"
+    })
+  ) %>%
+  group_by(feature, mechanism) %>%
+  summarise(
+    from = ifelse(all(c("DIABLO","SingleOmicSelection") %in% from), "both", unique(from)),
+    correlation_with_neighbors = first(correlation_with_neighbors),
+    .groups = "drop"
+  ) %>%
+  arrange(feature)
+write.csv(combined_table, "combined_table.csv")
+
+
+
+nrow(combined_table %>%
+       filter((from == "SingleOmicSelection" | from == "both" & mechanism != "Other")))/length(c(features_largest_subgraph.key,features_largest_subgraph.diablo)) *100
+
+nrow(combined_table %>%
+       filter((from == "DIABLO" | from == "both" & mechanism != "Other")))/length(c(features_largest_subgraph.key,features_largest_subgraph.diablo)) *100
+
+nrow(combined_table %>%
+       filter((from == "DIABLO" | from == "both" & mechanism == "Other")))/length(c(features_largest_subgraph.key,features_largest_subgraph.diablo)) *100
+
+print("some DIABLO features complement the features set we used to filter and project the first network, either because they were found jointly across investigations, or because they were not previously identified but consitute interactors in mechanisms of interest\n
+      This is about 44% of the features")
+nrow(combined_table %>%
+       filter((from == "SingleOmicSelection" | from == "both" & mechanism != "Other") | (from == "DIABLO" & mechanism != "Other")))/length(c(features_largest_subgraph.key,features_largest_subgraph.diablo)) *100
+
+print("The other 50% of the features seem to be more detox oriented...")
+combined_table %>%
+       filter(mechanism == "Other") %>% pull(feature)
+combined_table %>%
+       filter(mechanism != "Other") %>% pull(feature)
+
+
+#Microbial metabolism: sulfur cycling, carbohydrate fermentation
+#Host liver metabolism: lipid synthesis, bile acid transport, detoxification, retinol metabolism
+### features both expand and link back to previous notions of host-microbe mechanism hypothesized to 
+### coordinate sulfur and bile handling to mediated increased adiposity
+
+print("features unique between largest connected subgraphs")
+combined_table %>% filter(from != "both" & mechanism != "Other") %>% pull(feature) %>% length()
+print("features shared across largest connected subgraphs of diablo/keyword-searched feature sets")
+combined_table %>% filter(from == "both" & mechanism != "Other") %>% pull(feature) %>% length()
+#### provide lots of additional context .
+
+
+
+
+```
+
+
+
+
+## suppl.
+
+
+```{r, not convinced this is needed at all actually!!!!!! }
+## keyword search for features supporting central (adipose hypertrophy) and supporting (adipose hyperplasia) mechanisms prev. suggested 
+
+
+# collect selected features from your model
+all_feats <- unlist(lapply(final.diablo.model_data$loadings, rownames))
+
+#### barplot draft
+# barplot(c(`Hypertrophy-feature sum` = sum(grepl(paste(hypert, collapse="|"), all_feats, ignore.case=TRUE)),
+#           `Hyperplasia-features sum` = sum(grepl(paste(hyperp, collapse="|"), all_feats, ignore.case=TRUE))),
+#         ylab="Count of features", col=c("steelblue","firebrick"),
+#         main = "Count of features supporting hypertrophy/hyperplasia models")
+
+
+```
+
+
+
+```{r}
+
+#substring for multiple features/ or write in specific one
+#### bit of draft code for searching nearest neighbs of features of interest
+feature_substring <- "microbe_Bacteroides_thetaiotaomicron"
+features <- grep(feature_substring, V(g)$name, value = TRUE)  # returns all matching node names
+#first neighb for all features pulled by substring
+primary <- unique(unlist(lapply(features, function(f) neighbors(g, v = f, mode = "all"))))
+primary_names <- V(g)$name[primary]
+#secondary neighbs
+secondary <- unique(unlist(lapply(primary, function(f) neighbors(g, v = f, mode = "all"))))
+secondary_names <- setdiff(V(g)$name[secondary], c(features, primary_names))
+#results
+ features        #nodes match string
+ primary_names   #directly connected nodes
+ secondary_names #secondarily connected neighb
+
+
+```
+
+
+
+
+```{r}
+
+#### removing top 30 from diablo and using the NEXT top 30 loadings instead
+
+# #### leaving only the top 30 DIABLO id'd features co-varying the most across each block
+# top_features <- lapply(names(final.diablo.model_data$X), function(b) {
+#   loadings_block <- final.diablo.model_data$loadings[[b]][, 1]       #comp1
+#   loadings_block <- loadings_block[!is.na(loadings_block)]
+#   feats <- names(sort(loadings_block, decreasing = TRUE))[1:30]      #top 30
+#   feats <- gsub(" ", "_", feats)                                     #replace spaces
+#   paste0(b,"_", feats)                                                   #add block prefix
+# })
+# names(top_features) <- names(final.diablo.model_data$X)
+# #top_features
+# 
+# #### removing top30 DIABLO id'd features co-varying the most across each block
+# exclude_feats <- unlist(lapply(top_features, `[`, 1:30)) %>%
+#                  gsub("-", "_", .)  # replace hyphens
+# #match up for exclusion of top 20 diablo features
+# matched_names <- colnames(cors_mat)[unique(unlist(lapply(exclude_feats, function(s) grep(s, colnames(cors_mat), fixed = TRUE))))]
+# 
+# cors_mat <- cor(all_feats, use="pairwise.complete.obs")
+# #subset corr matrix
+# cors_mat2 <- cors_mat[!rownames(cors_mat) %in% matched_names,
+#                       !colnames(cors_mat) %in% matched_names]
+# 
+# diag(cors_mat2) <- 0  #no self-corr-ing
+# #get top 30 per block
+# new_top_features <- setNames(
+#   lapply(c("microbe_", "serum_", "cecum_", "liver_"), function(pref) {
+#     features_block <- grep(paste0("^", pref), colnames(cors_mat2), value = TRUE)
+#     max_abs_cor <- sapply(features_block, function(f) max(abs(cors_mat2[f, ]), na.rm = TRUE))
+#     names(sort(max_abs_cor, decreasing = TRUE))[1:30]
+#   }),
+#   c("microbe_", "serum_", "cecum_", "liver_")
+# )
+# cors_mat2 <- cors_mat2[rownames(cors_mat2) %in% unlist(new_top_features) %>% as.vector(),
+#                       colnames(cors_mat2) %in% unlist(new_top_features) %>% as.vector()]
+# 
+# ### thresholding for correlated features of interset (taking abs value of 0.75 so can be highly pos/neg corr.)
+# edges <- which(abs(cors_mat2) >= 0.75 & lower.tri(cors_mat2), arr.ind=TRUE)
+# g <- graph_from_edgelist(cbind(rownames(cors_mat2)[edges[,1]],
+#                                rownames(cors_mat2)[edges[,2]]), directed=FALSE)
+# E(g)$weight <- cors_mat2[edges]
+# 
+# ###select colors/can update  this (colors of points for each blank)
+# V(g)$block <- sapply(strsplit(V(g)$name, "_"), `[`, 1)
+# 
+# ## make sure we're subsetting logically
+# 
+# ####plot net
+# ggraph(g, layout="stress") +
+#   geom_edge_link(aes(color = weight), width=1) +
+#   geom_node_point(aes(color = block), size=3) +
+#   geom_node_text(aes(label = name), repel=TRUE, size=2) +
+#   scale_edge_color_gradient2(low="blue", mid="grey", high="red", midpoint=0,
+#                              name="Correlation") +
+#   theme_void() +
+#   theme(legend.position="right")
+# 
+# ##extract features from most connected plot
+# features_largest_subgraph <- V(g)$name[components(g)$membership == which.max(components(g)$csize)]
+# #features_largest_subgraph
+# length(features_largest_subgraph)
+# 
+# 
+# #wow very replete and uninformative feature set as it relates to our proposed model after removing top 30 across blocks and then grabbing the next top 30 per block... to me this signals the importance and performance of diablos work in feature selection
+
+```
+
+
+```{r}
+
+block_filters <- list(
+ microbiome = c("microbe_Bacteroides_thetaiotaomicron","scindens", "symbiosum", "sulf"),
+ cecal_metabolome  = c("carb", "mannitol", "buty", "buta", "propa", "propi", "sterol", "chol", "sacch", "ose"),
+ serum_metabolome  = c("carb", "mannitol", "buty", "buta", "propa", "propi", "sulf", "cyst", "sterol", "chol", "sacch", "ose"),
+ liverA = c("Csad", "Cdo1", "Fmo1", "Gclc", "Cth", "Mfsd"),
+ liverB = c("Cyp", "Hnf4a", "Slc10a1"),
+ liverC = c("Rxr", "Nr1h3","Nr1h4", "Nr1i3", "Nr1i2", "Retsat", "Rbp1"),
+ liverD = c("Fasn", "Acaca", "Acacb", "Sreb", "Scd1", "Acly", "Slc27a5"),
+ liverE = c("Slc6a6","Slc6a13","Slc", "Ctnnb", "Wnt", "Mfrp", "Fzd"),
+ liverF = c("Ppar", "Cebp", "Sreb", "Klf", "Fabp", "Adipoq", "Cidec", "Gpd1", "Stat5", "Wnt", "Ctnnb")
+)
+
+
+all_paths <- list(
+ c("microbiome","cecal metabolome","serum metabolome","liverA","liverB","liverE", "liverF"),
+ c("microbiome","cecal metabolome","serum metabolome","liverA","liverB","liverC","liverD"),
+ c("microbiome","cecal metabolome","serum metabolome","liverA","liverB")
+)
+
+
+
+
+
+
+
+write_xlsx(x =  , path = "4nclip.xlsx", col_names = TRUE, format_headers = TRUE)
+
+```
+
+
+
+
+```{r} 
+
+#Updated code 10/17/2025
+set.seed(123)
+
+# # define hypothesis feature lists
+keywords <- c(
+  "Lachno", "thetaiotaomicron", "scindens", "symbiosum","hiranonis",
+  "Csad","Cdo1","Fmo1","Stra","Aldh","Rdh","Scd",
+  "Rbp","Fasn","Acaca","Elovl","Retsat","Cyp","Slc10a1","Hsd","Ctnnb1","Wnt","Ppar","Sreb","Abcb11","Sfrp1","Fzd",
+  "carb","sulf","chol","taur","oxy","stero","glucos","mann",
+  "acetyl","phos","sugar","glyco","sacch","retin","malonyl", "palmit", "steara","acyl", "olea",
+  "sialic","fucose","hexose","pentose","heptose","octulose","uronic","lactone"
+)
+
+top_features_filt <- lapply(names(final.diablo.model_data$X), function(block) {
+  load_block <- final.diablo.model_data$loadings[[block]][, 1]   #loadings comp1
+  load_block <- load_block[!is.na(load_block)] #chuck NA
+  keep_idx <- grepl(paste(keywords, collapse = "|"), names(load_block), ignore.case = TRUE) #keyword pull
+  load_block <- load_block[keep_idx]
+  feats <- names(sort(abs(load_block), decreasing = TRUE))[1:min(30, length(load_block))] #get abs vals for loading matches + pull top 30
+  feats <- gsub(" ", "_", feats) #clean names
+  paste0(block, "_", feats)
+})
+#top_features
+
+##combine blocks with block-prefix feat names
+all_feats <- do.call(cbind, lapply(names(final.diablo.model_data$X), function(b) {
+  mat <- final.diablo.model_data$X[[b]]
+  colnames(mat) <- paste0(b, "_", gsub(" ", "_", colnames(mat)))  #fill spaces w/underscore
+  mat
+}))
+
+#correlation matrix across entire feature sets
+cors_mat <- cor(all_feats, use="pairwise.complete.obs", method = "spearman")
+diag(cors_mat) <- 0  #no self-corr
+selected_feats <- intersect(unlist(top_features_filt), colnames(cors_mat))
+cors_mat2 <- cors_mat[selected_feats, selected_feats, drop = FALSE]
+#feature filtering by keyword gets all matches from entire dataset ends up being 200 some features
+# mod_feats <- grep(paste(keywords, collapse="|"), colnames(cors_mat),ignore.case=TRUE, value=TRUE)
+# cors_mat <- cors_mat[unique(mod_feats),
+#                      unique(mod_feats)]
+
+### thresholding for correlated features of interset (taking abs value of 0.75 so can be highly pos/neg corr.)
+
+edges <- which(abs(cors_mat2) >= 0.7 & lower.tri(cors_mat2), arr.ind=TRUE)
+g <- graph_from_edgelist(
+  cbind(rownames(cors_mat2)[edges[,1]], rownames(cors_mat2)[edges[,2]]),
+  directed = FALSE
+)
+
+### assign block info
+V(g)$block <- sapply(strsplit(V(g)$name, "_"), `[`, 1)
+#magnitude for layout
+E(g)$weight <- abs(cors_mat2[edges])
+#signed correlation
+E(g)$weight_signed <- cors_mat2[edges]   
+
+#get largest subgraph 
+comps <- components(g)
+largest_comp_id <- which.max(comps$csize)
+V(g)$in_largest <- comps$membership == largest_comp_id
+
+###pagerank/consistent w trying to assess  directionality + consistent w/ metabolomics
+E(g)$pr_weight <- abs(E(g)$weight_signed) / max(abs(E(g)$weight_signed))
+pr <- page_rank(g, directed = TRUE, weights = E(g)$pr_weight)$vector
+
+#centraliry thresh for pagerank score
+pr_thresh <- quantile(pr[V(g)$in_largest], 0.7)
+V(g)$is_hub <- V(g)$in_largest & pr >= pr_thresh
+
+## color the nodes And add labels
+V(g)$node_color <- ifelse(V(g)$is_hub, V(g)$block, "gray70")
+V(g)$label_text <- ifelse(V(g)$in_largest, V(g)$name, "")
+V(g)$label_color <- ifelse(V(g)$node_color == "gray70", "gray70", "black")
+###color pallete
+dark2_cols <- brewer.pal(4, "Dark2")
+names(dark2_cols) <- c("microbe", "cecum", "serum", "liver")
+
+hub_labels <- V(g)$label_text
+hub_labels[!V(g)$is_hub] <- ""
+
+nonhub_labels <- V(g)$label_text
+nonhub_labels[V(g)$is_hub] <- ""
+
+#jpeg("filtered_network_1.jpeg", units="in", height = 16, width= 20, res=600)
+jpeg("filtered_network_1.jpeg", units="cm", height = 60, width=90, res=600)
+ggraph(g, layout = layout_with_kk(g, weights = E(g)$weight)) +
+  geom_edge_link(aes(
+    color = weight_signed), 
+    width = 0.8) +
+  geom_node_point(aes(
+    color = node_color), 
+    size = 8, 
+    show.legend = TRUE) +
+  # geom_node_text(aes(
+  #   label = label_text),
+  #   color = V(g)$label_color,
+  #   repel = TRUE, 
+  #   size = 8,
+  #   fontface = "bold",
+  #   show.legend = FALSE
+  # ) +
+  geom_node_text(
+    aes(label = nonhub_labels),
+    color = "gray50",
+    repel = TRUE, 
+    size = 8, 
+    show.legend = FALSE
+    ) +
+  geom_node_text(
+    aes(label = hub_labels),
+    color = "black",
+    repel = TRUE, 
+    size = 8, 
+    fontface = "bold", 
+    show.legend = FALSE
+    ) +
+  scale_edge_color_gradient2(
+    low = "skyblue1", mid = "grey90", high = "red",
+    midpoint = 0, limits = c(-1, 1),
+    name = "Relative Correlation"
+  ) +
+  scale_color_manual(
+    values = dark2_cols,
+    name = "Omic Block",
+    breaks = c("microbe","cecum","serum","liver"),
+    labels = c("Microbiome","Cecum Metabolome","Serum Metabolome","Liver Transcriptome")
+  ) +
+  theme_void() +
+  theme(legend.position = c(0.95, 0.6),
+        legend.text = element_text(size = 20, face = "bold"),
+        legend.title = element_text(size = 20, face = "bold"),
+        legend.key.size = unit(1, "cm"),
+        panel.grid = element_blank()
+  )
+dev.off()
+
+# ##Pull out counts of features per block in this keyword filtered network
+# Featuresperblock <- table(V(g)$block[V(g)$label_color == "black"])
+# print(Featuresperblock)
+
+#print(keyword)
+
+#ggsave("filtered_keyword_subset.png", plot = keyword, width=16, height=9, dpi=600, bg = "white")
+
+# ##extract features from most connected plot
+comps <- components(g)
+largest_comp <- which.max(comps$csize)
+features_largest_subgraph.key <- V(g)$name[comps$membership == largest_comp]
+filtered_datakey_suppl1 <- data.frame(
+  feature = V(g)$name[which(comps$membership == largest_comp)],
+  color   = V(g)$label_color[which(comps$membership == largest_comp)]
+  )
+
+# ##extract features from most connected plot
+# comps <- components(g)
+# largest_comp <- which.max(comps$csize)
+# features_largest_subgraph.key <- V(g)$name[comps$membership == largest_comp]
+# #View(data.frame(features_largest_subgraph.key))
+# #length(features_largest_subgraph.key)
+
+```
+
+
+```{r}
+
+##updated code 10/17/2025
+
+set.seed(123)
+#### leaving only the top 30 DIABLO id'd features co-varying the most across each block
+top_features <- lapply(names(final.diablo.model_data$X), function(b) {
+  loadings_block <- final.diablo.model_data$loadings[[b]][, 1]       #comp1
+  loadings_block <- loadings_block[!is.na(loadings_block)]
+  feats <- names(sort(loadings_block, decreasing = TRUE))[1:30]      #top 30
+  feats <- gsub(" ", "_", feats)                                     #replace spaces
+  paste0(b,"_", feats)                                                   #add block prefix
+})
+names(top_features) <- names(final.diablo.model_data$X)
+
+top_features
+##combine blocks with block-prefix feat names
+all_feats <- do.call(cbind, lapply(names(final.diablo.model_data$X), function(b) {
+  mat <- final.diablo.model_data$X[[b]]
+  colnames(mat) <- paste0(b, "_", gsub(" ", "_", colnames(mat)))  #fill spaces w/underscore
+  mat
+}))
+
+#correlation matrix across entire feature sets
+cors_mat3 <- cor(all_feats, use="pairwise.complete.obs", method = "spearman")
+diag(cors_mat3) <- 0  #no self-corr
+selected_feats <- intersect(unlist(top_features), colnames(cors_mat3))
+cors_mat3 <- cors_mat3[selected_feats, selected_feats, drop = FALSE]
+# cors_mat <- cor(all_feats, use="pairwise.complete.obs")
+# dimnames(cors_mat) <- lapply(dimnames(cors_mat), function(x) gsub(" ", "_", x))
+# cors_mat3 <- cors_mat[unlist(top_features) %>% as.vector(),
+#                       unlist(top_features) %>% as.vector()]
+# diag(cors_mat3) <- 0
+
+### thresholding for correlated features of interset (taking abs value of 0.75 so can be highly pos/neg corr.)
+edges <- which(abs(cors_mat3) >= 0.7 & lower.tri(cors_mat3), arr.ind=TRUE)
+g <- graph_from_edgelist(
+  cbind(rownames(cors_mat3)[edges[,1]], rownames(cors_mat3)[edges[,2]]),
+  directed = FALSE
+)
+
+### assign block info
+V(g)$block <- sapply(strsplit(V(g)$name, "_"), `[`, 1)
+E(g)$weight <- abs(cors_mat3[edges])       # magnitude for layout
+E(g)$weight_signed <- cors_mat3[edges]     # signed correlation
+
+#get largest subgraph 
+comps <- components(g)
+largest_comp_id <- which.max(comps$csize)
+V(g)$in_largest <- comps$membership == largest_comp_id
+
+###pagerank/consistent w trying to assess  directionality + consistent w/ metabolomics
+E(g)$pr_weight <- abs(E(g)$weight_signed) / max(abs(E(g)$weight_signed))
+pr <- page_rank(g, directed = TRUE, weights = E(g)$pr_weight)$vector
+
+#centraliry thresh for pagerank score
+pr_thresh <- quantile(pr[V(g)$in_largest], 0.7)
+V(g)$is_hub <- V(g)$in_largest & pr >= pr_thresh
+
+## color the nodes And add labels
+V(g)$node_color <- ifelse(V(g)$is_hub, V(g)$block, "grey70")
+V(g)$label_text <- ifelse(V(g)$in_largest, V(g)$name, "")
+V(g)$label_color <- ifelse(V(g)$node_color == "grey70", "grey90", "black")
+
+## Set label size based on label color
+#V(g)$label_size <- ifelse(V(g)$label_color == "black", 8, 6)
+
+###color pallete
+dark2_cols <- brewer.pal(4, "Dark2")
+names(dark2_cols) <- c("microbe", "cecum", "serum", "liver")
+
+hub_labels <- V(g)$label_text
+hub_labels[!V(g)$is_hub] <- ""
+
+nonhub_labels <- V(g)$label_text
+nonhub_labels[V(g)$is_hub] <- ""
+
+#jpeg("unfiltered_network_2.jpeg", units="in", height = 16, width= 20, res=600)
+jpeg("unfiltered_network_2.jpeg", units="cm", height = 60, width= 90, res=600)
+ggraph(g, layout = layout_with_kk(g, weights = E(g)$weight)) +
+  geom_edge_link(aes(
+    color = weight_signed), 
+    width = 0.8) +
+  geom_node_point(aes(
+    color = node_color), 
+    size = 8, 
+    show.legend = TRUE) +
+  # geom_node_text(
+  #   aes(label = label_text),
+  #   color = V(g)$label_color,
+  #   repel = TRUE,
+  #   size = 5,
+  #   fontface = "bold",
+  #   show.legend = FALSE
+  # ) +
+  # geom_node_text(
+  #   aes(label = label_text, size = label_size),
+  #   color = V(g)$label_color,
+  #   repel = TRUE,
+  #   fontface = "bold",
+  #   show.legend = FALSE
+  # ) +
+  geom_node_text(
+    aes(label = nonhub_labels),
+    color = "gray50",
+    repel = TRUE, size =8, show.legend = FALSE
+    ) +
+  geom_node_text(
+    aes(label = hub_labels),
+    color = "black",
+    repel = TRUE, size = 8, fontface = "bold", show.legend = FALSE
+    ) +
+  scale_size_identity() +
+  scale_edge_color_gradient2(
+    low = "skyblue1", mid = "grey90", high = "red",
+    midpoint = 0, limits = c(-1, 1),
+    name = "Relative Correlation"
+  ) +
+  scale_color_manual(
+    values = dark2_cols,
+    name = "Omic Block",
+    breaks = c("microbe","cecum","serum","liver"),
+    labels = c("Microbiome","Cecum Metabolome","Serum Metabolome","Liver Transcriptome")
+  ) +
+  theme_void()+
+  theme(legend.position = c(0.95, 0.6),
+        legend.text = element_text(size = 20, face = "bold"),
+        legend.title = element_text(size = 20, face = "bold"),
+        legend.key.size = unit(1, "cm"),
+        panel.grid = element_blank()
+  )
+dev.off()
+
+# ##features per block in this diablo top-feature only network
+# diablofeatures<-table(V(g)$block[V(g)$label_color == "black"])
+# print(diablofeatures)
+
+##extract features from most connected plot
+comps <- components(g)
+largest_comp <- which.max(comps$csize)
+features_largest_subgraph.key <- V(g)$name[comps$membership == largest_comp]
+filtered_datakey_suppl1 <- data.frame(
+  feature = V(g)$name[which(comps$membership == largest_comp)],
+  color   = V(g)$label_color[which(comps$membership == largest_comp)]
+  )
+
+# ##extract features from most connected plot
+# features_largest_subgraph.diablo <- V(g)$name[comps$membership == largest_comp]
+# print(features_largest_subgraph.diablo)
+# length(features_largest_subgraph.diablo)
+# #features_largest_subgraph
+
+```
+
+##draft net figure
+
+```{r}
+set.seed(123)
+# ##draft net figure
+# ########### PULLING FROM QUEST
+# long_table <- read_csv("mini_path_table_all.csv")
+# 
+# ###update mechanism mapping to include complex carboxylic acid node labels not captured by simple substring-level subsets (e.g. "ethylthio_propionic" as opposed to a substring like "carb")
+# mechanism_map <- function(df){
+#   data.frame(df) %>% mutate(
+#     mechanism = case_when(
+#       grepl("carb|ethylthio_propionic|propionic|cyanobutano", lhs, ignore.case=TRUE) ~ "Both",
+#       grepl("scindens", rhs, ignore.case=TRUE) & grepl("sterol", lhs, ignore.case=TRUE) ~ "Both",
+#       grepl("thetaiota", rhs, ignore.case=TRUE) & grepl("carb", lhs, ignore.case=TRUE) ~ "Both",
+#       grepl("Cyp2c70|Cyp2a12|Fasn|Acac|Srebp1c", lhs, ignore.case=TRUE) ~ "Hypertrophy",
+#       grepl("Csad|Cdo1|Slc6a6|Wnt|Ppar", lhs, ignore.case=TRUE) ~ "Hyperplasia",
+#       TRUE ~ "Incoherent"
+#     )
+#   )
+# }
+# 
+# long_table <- mechanism_map(long_table)
+# 
+# ###map blocklevel labels
+# get_block <- function(node_name){
+#   case_when(
+#     grepl("^microbe_", node_name) ~ "Microbe",
+#     grepl("^cecum_", node_name)   ~ "Cecum",
+#     grepl("^serum_", node_name)   ~ "Serum",
+#     grepl("^liver_", node_name)   ~ "Liver",
+#     TRUE ~ "Other"
+#   )
+# }
+# 
+# #get significant edge+node dadta
+# edges <- long_table %>%
+#   filter(pvalue < 0.05,
+#          (ci.lower > 0 & ci.upper > 0) | (ci.lower < 0 & ci.upper < 0)) %>%
+#   filter(abs(est) > 0.5) %>%
+#   dplyr::select(from=rhs, to=lhs, mechanism)
+# 
+# nodes <- unique(c(edges$from, edges$to))
+# nodes_df <- data.frame(name = nodes) %>%
+#   mutate(block = get_block(name))
+# 
+# graph_obj <- igraph::graph_from_data_frame(edges, vertices = nodes_df, directed = TRUE)
+# 
+# #grab central/top nodes for plotting
+# centr <- igraph::page_rank(graph_obj, mode="all", normalized=TRUE)
+# top_nodes <- names(centr[centr > quantile(centr, 0.7)])
+# graph_top <- igraph::induced_subgraph(graph_obj, vids = top_nodes)
+# 
+# 
+# minipath <- ggraph(graph_top, layout="stress") +
+#   geom_edge_link(aes(color=mechanism), 
+#                  arrow=arrow(length=unit(4,'mm')), 
+#                  end_cap=circle(3,'mm'),
+#                  show.legend=TRUE) +
+#   geom_node_point(aes(color=block), size=5) +
+#   geom_node_text(aes(label=name), repel=TRUE, fontface = "bold") +
+#   theme_minimal() +
+#   theme(panel.grid=element_blank()) +
+#   scale_edge_color_manual(values=c("Hypertrophy"="blue", 
+#                                   "Hyperplasia"="red", 
+#                                   "Both"="purple",
+#                                   "Incoherent"="black")) +
+#   scale_color_manual(values=c("Microbe"="green",
+#                               "Cecum"="orange",
+#                               "Serum"="purple",
+#                               "Liver"="brown",
+#                               "Other"="gray"))
+# 
+# 
+# ggsave("directed_mini_path_network.png", width=16, height=8, bg ="white", dpi=600, plot = minipath)
+
+
+# ##Updated draft net figure 10/21/2025
+# 
+# ########### PULLING FROM QUEST
+# long_table <- read_csv("mini_path_table_allFinal.csv")
+# 
+# ###update mechanism mapping to include complex carboxylic acid node labels not captured by simple substring-level subsets (e.g. "ethylthio_propionic" as opposed to a substring like "carb")
+# mechanism_map <- function(df){
+#   data.frame(df) %>% mutate(
+#     mechanism = case_when(
+#       grepl("carb|ethylthio_propionic|propionic|cyanobutano", lhs, ignore.case=TRUE) ~ "Both",
+#       grepl("scindens", rhs, ignore.case=TRUE) & grepl("sterol", lhs, ignore.case=TRUE) ~ "Both",
+#       grepl("thetaiota", rhs, ignore.case=TRUE) & grepl("carb", lhs, ignore.case=TRUE) ~ "Both",
+#       grepl("Cyp2c70|Cyp2a12|Fasn|Acac|Srebp1c", lhs, ignore.case=TRUE) ~ "Hypertrophy",
+#       grepl("Csad|Cdo1|Slc6a6|Wnt|Ppar", lhs, ignore.case=TRUE) ~ "Hyperplasia",
+#       TRUE ~ "Unknown"
+#     )
+#   )
+# }
+# 
+# long_table <- mechanism_map(long_table)
+# 
+# ###map blocklevel labels
+# get_block <- function(node_name){
+#   case_when(
+#     grepl("^microbe_", node_name) ~ "Microbe",
+#     grepl("^cecum_", node_name)   ~ "Cecum",
+#     grepl("^serum_", node_name)   ~ "Serum",
+#     grepl("^liver_", node_name)   ~ "Liver",
+#     TRUE ~ "Other"
+#   )
+# }
+# 
+# ###get significant edge+node data
+# edges <- long_table %>%
+#   filter(pvalue < 0.05,
+#          (ci.lower > 0 & ci.upper > 0) | (ci.lower < 0 & ci.upper < 0)) %>%
+#   filter(abs(est) > 0.5) %>%
+#   dplyr::select(from = rhs, to = lhs, mechanism, est)
+# 
+# nodes <- unique(c(edges$from, edges$to))
+# nodes_df <- data.frame(name = nodes) %>%
+#   mutate(block = get_block(name))
+# 
+# #Force order of legend terms
+# #Mechanism factor levels
+# edges$mechanism <- factor(edges$mechanism, levels = c("Hypertrophy", "Hyperplasia", "Both", "Unknown"))
+# #nodes block factor levels
+# nodes_df$block <- factor(nodes_df$block, levels = c("Microbe", "Cecum", "Serum", "Liver", "Other"))
+# 
+# ##Graph Object
+# graph_obj <- igraph::graph_from_data_frame(edges, vertices = nodes_df, directed = TRUE)
+# 
+# ###grab central/top nodes for plotting with edge strength (est. col considered)
+# centr <- igraph::strength(graph_obj, mode = "all", weights = abs(E(graph_obj)$est))
+# graph_top <- igraph::induced_subgraph(graph_obj, vids = names(centr[centr > quantile(centr, 0.70)]))
+# 
+# ggraph(graph_top, layout="stress") +
+#   geom_edge_link(aes(color=mechanism), 
+#                  arrow=arrow(length=unit(8,'mm')), 
+#                  end_cap=circle(3,'mm'),
+#                  show.legend=TRUE) +
+#   geom_node_point(aes(color=block), 
+#                   size=10) +
+#   geom_node_text(aes(label=name), 
+#                  repel=TRUE, 
+#                  size = 10, 
+#                  fontface = "bold") +
+#   theme_minimal() +
+#   scale_edge_color_manual(
+#     name = "Mechanism",
+#     values=c("Hypertrophy"="blue", 
+#                                   "Hyperplasia"="red", 
+#                                   "Both"="purple",
+#                                   "Unknown"="black"),
+#                           (breaks=c("Hypertrophy", "Hyperplasia", "Both", "Unknown"))) +
+#   scale_color_manual(
+#     name = "Dataset",
+#     values=c("Microbe"="green",
+#                               "Cecum"="orange",
+#                               "Serum"="purple",
+#                               "Liver"="brown",
+#                               "Other"="gray"),
+#                      (breaks=c("Microbe", "Cecum", "Serum", "Liver", "Other"))) +
+#   theme(panel.grid=element_blank(),
+#         legend.position = c(0.95, 0.20),
+#         legend.text = element_text(size = 25, face = "bold"),
+#         legend.title = element_text(size = 25, face = "bold"),
+#         legend.key.size = unit(1, "cm"),
+#         axis.text = element_blank(),
+#         axis.ticks = element_blank(),
+#         axis.title = element_blank()
+#         )
+# 
+# ggsave("directed_mini_path_network_final.jpeg", width=90, height=60, units = "cm", bg ="white", dpi=600, plot = last_plot())
+
+#updated code 10/28/2025
+
+library(dplyr)
+library(readr)
+library(igraph)
+library(ggraph)
+library(ggplot2)
+library(ggrepel)
+
+#long_table <- read_csv("mini_path_table_full3.csv")
+long_table <- fread("mini_path_table_full4.csv", sep = ",")
+
+##map node block
+get_block <- function(node_name){
+  case_when(
+    grepl("^microbe_", node_name) ~ "microbe",
+    grepl("^cecum_", node_name)   ~ "cecum",
+    grepl("^serum_", node_name)   ~ "serum",
+    grepl("^liverA_", node_name)  ~ "liverA",
+    grepl("^liverB_", node_name)  ~ "liverB",
+    grepl("^liverC_", node_name)  ~ "liverC",
+    grepl("^liverD_", node_name)  ~ "liverD"
+  )
+}
+
+feature_colors <- c(
+  "microbe" = "purple",
+  "cecum"   = "darkblue",
+  "serum"   = "darkgreen",
+  "liverA"  = "yellowgreen",
+  "liverB"  = "goldenrod",
+  "liverC"  = "darkorange",
+  "liverD"  = "darkred"
+)
+
+###filter edges and add bh/padj correction
+edges <- long_table %>%
+  group_by(lhs) %>%
+  mutate(padj = p.adjust(pvalue, method="fdr")) %>%
+  ungroup() %>%
+  filter(
+    (pvalue < 0.05 & padj < 0.1),
+    (ci.lower > 0 & ci.upper > 0) | (ci.lower < 0 & ci.upper < 0),
+    abs(est) > 0.5
+  ) %>%
+  dplyr::select(from = rhs, to = lhs, mechanism, est, path_id) %>%
+  mutate(from_block = get_block(from),
+         to_block   = get_block(to))
+
+###aggre path definitions
+all_paths <- list(
+  c("microbe","cecum","serum","liverA","liverB","liverD"),
+  c("microbe","cecum","serum","liverA","liverB","liverC","liverD"),
+  c("microbe","cecum","serum","liverA","liverC","liverB","liverD")
+)
+
+### aggregate for clean output path... we have larger input now
+edges_path_agg <- lapply(all_paths, function(path){
+  edges %>%
+    filter(from_block %in% path & to_block %in% path) %>%
+    filter(sapply(1:nrow(.), function(i){
+      idx_from <- match(.$from_block[i], path)
+      idx_to   <- match(.$to_block[i], path)
+      idx_to - idx_from == 1
+    })) %>%
+    group_by(from, to) %>%
+    summarize(
+      n_paths = n(),
+      est = mean(est),
+      mechanism_mode = paste(unique(mechanism), collapse="/"),
+      .groups="drop"
+    )
+}) %>% bind_rows() %>%
+  filter(n_paths >= 2)
+
+##construct graph
+graph_obj <- graph_from_data_frame(edges_path_agg, directed=TRUE)
+
+##grab largest connected subgraph as we do
+comps <- components(graph_obj)
+largest_comp_id <- which.max(comps$csize)
+graph_obj <- induced_subgraph(graph_obj, vids=V(graph_obj)[comps$membership == largest_comp_id])
+
+###define high centrality threshold
+V(graph_obj)$centrality <- strength(graph_obj, mode="all", weights=abs(E(graph_obj)$est))
+pr_thresh <- quantile(V(graph_obj)$centrality, 0.7)
+V(graph_obj)$is_hub <- V(graph_obj)$centrality >= pr_thresh
+
+V(graph_obj)$Feature <- get_block(V(graph_obj)$name)
+V(graph_obj)$node_color <- ifelse(V(graph_obj)$is_hub, V(graph_obj)$Feature, "gray30")
+#V(graph_obj)$label_text <- ifelse(V(graph_obj)$is_hub | runif(vcount(graph_obj)) < 0.2, V(graph_obj)$name, "")
+#V(graph_obj)$label_color <- ifelse(V(graph_obj)$is_hub, "black", "gray50")
+# V(graph_obj)$size <- ifelse(V(graph_obj)$is_hub, 8, 4)
+##gray level thresholding
+##max supporting edges per node from the full edge table
+node_support <- sapply(V(graph_obj)$name, function(n){
+  e_idx <- which(edges_path_agg$from %in% n | edges_path_agg$to %in% n)
+  if(length(e_idx) == 0) return(0)
+  max(edges_path_agg$n_paths[e_idx])
+})
+
+####thresholding
+pr_thresh      <- quantile(V(graph_obj)$centrality, 0.7)  #0.7  centrality30 percentil
+support_thresh <- quantile(node_support, 0.7)             #30% support30 percentil
+gray_thresh    <- quantile(V(graph_obj)$centrality, 0.6)  #50 percentile for gray nodes
+
+###conditional add text for nodes 
+V(graph_obj)$label_text <- ifelse(
+  V(graph_obj)$centrality >= pr_thresh | node_support >= support_thresh,
+  V(graph_obj)$name,  #black label
+  ifelse(
+    V(graph_obj)$centrality >= gray_thresh | node_support >= quantile(node_support, 0.6),
+    V(graph_obj)$name,  #gray label
+    ""  #nonlabeled
+  )
+)
+#
+##color label conditionals incl grays
+V(graph_obj)$label_color <- ifelse(
+  V(graph_obj)$centrality >= pr_thresh | node_support >= support_thresh,
+  "black",
+  ifelse(
+    V(graph_obj)$centrality >= gray_thresh | node_support >= quantile(node_support, 0.6),
+    "gray50",
+    NA
+  )
+)
+###define high centrality threshold
+# V(graph_obj)$centrality <- strength(graph_obj, mode="all", weights=abs(E(graph_obj)$est))
+# pr_thresh <- quantile(V(graph_obj)$centrality, 0.7)
+# V(graph_obj)$is_hub <- V(graph_obj)$centrality >= pr_thresh
+# 
+# V(graph_obj)$Feature <- get_block(V(graph_obj)$name)
+# V(graph_obj)$node_color <- ifelse(V(graph_obj)$is_hub, V(graph_obj)$Feature, "gray30")
+# #V(graph_obj)$label_text <- ifelse(V(graph_obj)$is_hub | runif(vcount(graph_obj)) < 0.2, V(graph_obj)$name, "")
+# #V(graph_obj)$label_color <- ifelse(V(graph_obj)$is_hub, "black", "gray50")
+# # V(graph_obj)$size <- ifelse(V(graph_obj)$is_hub, 8, 4)
+# ##gray level thresholding
+# gray_thresh <- quantile(V(graph_obj)$centrality, 0.3)
+# 
+# ###Labeling based onllyy on centrality tiers
+# V(graph_obj)$label_text <- ifelse(
+#   V(graph_obj)$centrality >= pr_thresh, V(graph_obj)$name,         #black high
+#   ifelse(V(graph_obj)$centrality >= gray_thresh, V(graph_obj)$name, "")  #gray mid
+# )
+# 
+# V(graph_obj)$label_color <- ifelse(
+#   V(graph_obj)$centrality >= pr_thresh, "black",
+#   ifelse(V(graph_obj)$centrality >= gray_thresh, "gray50", "gray80")
+# )
+
+# V(graph_obj)$centrality <- strength(graph_obj, mode="all", weights=abs(E(graph_obj)$est))
+# pr_thresh <- quantile(V(graph_obj)$centrality, 0.7)
+# V(graph_obj)$is_hub <- V(graph_obj)$centrality >= pr_thresh
+# V(graph_obj)$Feature <- get_block(V(graph_obj)$name)
+# V(graph_obj)$node_color <- ifelse(V(graph_obj)$is_hub, V(graph_obj)$Feature, "gray30")
+# V(graph_obj)$label_text <- ifelse(V(graph_obj)$is_hub | runif(vcount(graph_obj)) < 0.1, V(graph_obj)$name, "")
+# V(graph_obj)$label_color <- ifelse(V(graph_obj)$is_hub, "black", "gray50")
+# #V(graph_obj)$label_color <- feature_colors[V(graph_obj)$Feature]
+# # V(graph_obj)$size <- ifelse(V(graph_obj)$is_hub, 8, 4)
+
+###keep coherent the paths with specified direction defining nodes along the central path
+microbe_nodes <- V(graph_obj)[grepl("^microbe", V(graph_obj)$name)]
+liverA_nodes  <- V(graph_obj)[grepl("^liverA", V(graph_obj)$name)]
+
+###extract valid nodes running microbe->liverA features
+valid_nodes_to_liverA <- unique(unlist(lapply(microbe_nodes, function(start){
+  unlist(lapply(liverA_nodes, function(end){
+    sapply(all_simple_paths(graph_obj, from=start, to=end, mode="out"), names)
+  }))
+})))
+
+##keep intact downstream the nodes liverA woudl be connected to
+downstream_nodes <- unique(unlist(lapply(liverA_nodes, function(v){
+  names(ego(graph_obj, order=vcount(graph_obj), nodes=v, mode="out")[[1]])
+})))
+
+###profile nodes running paths we profile in sem work upstream
+keep_nodes <- unique(c(valid_nodes_to_liverA, downstream_nodes))
+graph_obj <- induced_subgraph(graph_obj, vids=V(graph_obj)[V(graph_obj)$name %in% keep_nodes])
+
+####color edge according to whether it is root of hyperplasia/hypertrophy mechs
+edge_ends <- ends(graph_obj, E(graph_obj))
+E(graph_obj)$edge_color <- ifelse(
+  edge_ends[,1] %in% valid_nodes_to_liverA & edge_ends[,2] %in% valid_nodes_to_liverA,
+  "black",
+  "gray70"
+)
+
+###orient pllot layout
+layout_coords <- create_layout(graph_obj, layout="sugiyama")
+layout_coords$Feature <- V(graph_obj)$Feature
+layout_coords$size <- V(graph_obj)$size
+layout_coords$label <- V(graph_obj)$label_text
+layout_coords$label_color <- V(graph_obj)$label_color
+
+#install.packages("ggbeeswarm")
+library(ggbeeswarm)
+ggraph(layout_coords) +
+  geom_edge_link0(aes(color=I(E(graph_obj)$edge_color),
+                      width=n_paths,
+                      alpha=n_paths),
+                  arrow=arrow(length=unit(4, "mm"))) +
+  geom_node_point(aes(color=Feature), 
+                  size =8) +
+  geom_node_text(aes(label=label),
+                 color=layout_coords$label_color,
+                 alpha=ifelse(layout_coords$label_color== "black",1,0.6),
+                 #alpha = 1,
+                 size=10,
+                 fontface ="bold",
+                 repel=TRUE,
+                 box.padding = 1.5,
+                 point.padding = 2,
+                 segment.size = 2,
+                 max.overlaps = 28
+                 ) +
+  scale_color_manual(
+    values=c(
+  "microbe" = "purple",
+  "cecum"   = "darkblue",
+  "serum"   = "darkgreen",
+  "liverA"  = "yellowgreen",
+  "liverB"  = "goldenrod",
+  "liverC"  = "darkorange",
+  "liverD"  = "darkred"
+     # "microbe"="#E66100",
+     # "cecum"="#FBB13C",
+    #  "serum"="#F2E85E",
+      #"liverA"="#A6D854",
+     # "liverB"="#66C2A5",
+     # "liverC"="#4EA3C8",
+     # "liverD"="#4575B4"
+    ),
+    breaks=c("microbe","cecum","serum","liverA","liverB","liverC","liverD")
+  ) +
+  scale_edge_width(range=c(0.5,4), name="Supporting edges") +
+  scale_edge_alpha(range=c(0.3,1), name="Supporting edges") +
+  scale_size(range=c(3,8)) +
+  theme_void()+
+  theme(legend.position = c(0.94, 0.4),
+        legend.text = element_text(size = 40, face = "bold"),
+        legend.title = element_text(size = 40, face = "bold"),
+        legend.key.size = unit(1.5, "cm"),
+        panel.grid = element_blank(),
+        axis.text.y = element_text(angle = 120, vjust = 0.5, hjust = 0.5)
+  ) 
+        
+ggsave("directed_mini_path_network_final_12.jpeg", width=110, height=90, units = "cm", bg ="white", dpi=600, plot = last_plot(), limitsize = FALSE)
+
+```
