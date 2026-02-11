@@ -4,6 +4,8 @@ output: html_document
 date: "2025-09-03"
 ---
 
+## CONTAINS MULTIOMIC/MEDIATION ANALYSIS CODE (SUPPL S4D-F panels)
+
 ## load packages
 
 ```{r }
