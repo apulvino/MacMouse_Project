@@ -1,0 +1,499 @@
+---
+title: "cecal_pathways&permanovas"
+output: html_document
+date: "2024-05-30"
+---
+
+
+```{r, humann3 paths }
+
+library(readr)
+library(tidyr)
+library(reshape2)
+library(stringr)
+library(ggpubr)
+library(tibble)
+library(vegan)
+library(pairwiseAdonis)
+library(corncob)
+library(ggplot2)
+
+# hupath_orig <- data.frame(read_tsv("/Users/apulvino/AmatoLab/2_cecal_shotgun/humann3_pathabundance_cpm_stratified.tsv"))
+# hugene_orig <- data.frame(read_tsv("/Users/apulvino/humann3_genefamilies_cpm_unstratified.tsv"))
+
+hupath_orig <- data.frame(read_tsv("humann_pathabundance_cpm_unstratified.tsv"), row.names = 1)
+
+############## IMPORTANT: see cecal_shotgun.Rmd for loading (must run cecal_shotgun.rmd first)
+input_metadata <- metadata2
+
+############# SEE/RUN cecal_shotgun.Rmd FOR ALL PERMANOVA RESULTS NOW
+# #permanova
+# adonis2(t(hupath_orig) ~ group,
+#         data=data.frame(META),
+#         by = "margin",
+#         permutations = 5000)
+# 
+# # ## pairwise b/w groups
+# pairwise.adonis(t(hupath_orig), data.frame(META)$group,
+#                 sim.method = "bray",
+#                 p.adjust.m = "bonferroni")
+
+
+#rownames(hupath_orig) <- hupath_orig$X..Pathway
+#hupath_orig$X..Pathway <- NULL
+#hupath_orig$cat_cutrefoNeg2.810.USA.23.ATP.1873_S379_L005_Abundance < - NULL
+
+## Fix column names
+colnames(hupath_orig) <- gsub('cat_cutrefo', '',
+                          gsub('.USA.*', '',colnames(hupath_orig)))
+#colnames(hupath) <- colnames(hupath)[- grep("[0-9]+.[0-9].*", colnames(hupath))]
+
+### Separate path from bacterial species associated
+#hupath_split <- hupath_orig %>% separate_wider_delim("X..Pathway", delim = "|", names = c("path", "species"))
+#hupath[c('path', 'species')] <- str_split_fixed(hupath$`X..Pathway`, ' ', 2)
+
+### Convert data to long format
+#hupathsep_long <- melt(hupathsep)
+#hupath_long <- reshape2::melt(hupath_orig)
+
+### Separate sample number from species-trt group
+#hupath_long <- hupath_long %>% separate_wider_delim(variable, ".", names = c("sample", "trt"))
+
+
+# Remove any pathways that were unidentifiable (UNINTEGRATED) in creation of a new df
+#hupath_long_allpath <- hupath_long %>% filter(path != "UNINTEGRATED")
+
+
+
+### Number of pathways associated with a bug that were unidentifiable
+#sum(str_count(hupath_long$path, "UNINTEGRATED"))
+### Number of pathways annotated with a bug and were identifiable
+#sum(str_count(hupath_long$path, ":"))
+
+
+
+
+
+
+```
+
+
+
+```{r, pairwise maaaslin2 }
+
+# ### maaslin2
+#  # PAPER 1
+#BiocManager::install("Maaslin2")
+#install.packages("writexl")
+library(writexl)
+library(Maaslin2)
+library(dplyr)
+library(stringr)
+input_data <- hupath_orig
+# metadata2 is in cecal_shotgun.Rmd, run that first; ONLY need to run first two blocks of that Rmd.
+input_metadata <- metadata2
+input_metadata$file <- paste("cat_cutrefo", input_metadata$file, sep = "")
+input_metadata$file <- gsub("-", ".", input_metadata$file)
+input_metadata$file <- gsub("report_bracken_species.txt", "Abundance", input_metadata$file)
+rownames(input_metadata) <- input_metadata$file
+
+input_metadata$phys <- ifelse(input_metadata$group == "mac", "fat", "norm")
+
+#rownames(input_data) <- input_data$X..Pathway
+#input_data$X..Pathway <- NULL
+input_data <- t(input_data)
+
+input_metadata$sample <- sub(".USA.*", "",input_metadata$file)
+input_metadata$sample <- sub("cat_cutrefo", "",input_metadata$sample)
+rownames(input_metadata) <- input_metadata$sample
+
+input_metadata$hum <- as.factor(ifelse(input_metadata$group=="hum", 1,0))
+input_metadata$mac <- as.factor(ifelse(input_metadata$group=="mac", 1,0))
+input_metadata$sqm <- as.factor(ifelse(input_metadata$group=="sqm", 1,0))
+
+humac_metadata <- input_metadata %>% filter(input_metadata$hum == 1 | input_metadata$mac == 1)
+humac_input_data <- data.frame(input_data) %>% dplyr::select(-c(UNMAPPED, UNINTEGRATED)) %>% 
+  filter(!grepl("SbMm", rownames(.)))
+
+############# for use if we want "cleaned"/only annotated model output
+# input_data_class <- data.frame(input_data) %>%
+#   select(-matches("unclassified|UNINTEGRATED"))
+#rownames(input_metadata) <- input_metadata$file
+macvhum = Maaslin2(
+    input_data = (humac_input_data),
+    input_metadata = data.frame(humac_metadata),
+    output = "onerun",
+    min_prevalence = 0,
+    #fixed_effects = c("group", "mac"),
+    fixed_effects = "group",
+    reference = c("group,hum"),
+    plot_scatter = FALSE
+    )
+
+sqmac_metadata <- input_metadata %>% filter(input_metadata$mac == 1 | input_metadata$sqm == 1)
+sqmac_input_data <- data.frame(((input_data))) %>% dplyr::select(!c(UNMAPPED, UNINTEGRATED)) %>%
+  filter(!grepl("HsMm", rownames(.)))
+
+macvsqm = Maaslin2(
+    input_data = (sqmac_input_data),
+    input_metadata = sqmac_metadata,
+    output = "tworun",
+    min_prevalence = 0,
+    #fixed_effects = c("group", "mac"),
+    fixed_effects = "group",
+    reference = c("group,sqm"),
+    plot_scatter = FALSE
+    )
+
+#make new column containing repeat strain of mac v sqm or mac v hum
+macvsqm$results$comparison <- c('macvsqm')
+macvhum$results$comparison <- c('macvhum') 
+
+sup.data.1 <- rbind(macvsqm$results, macvhum$results)
+
+#full supplemental data for paper 1, rest of sub-setting goes into github rmd
+
+#write_xlsx(x =  macvhum$results, path =  "macvhum_results.xlsx", col_names = TRUE, format_headers = TRUE)
+#write_xlsx(x =  macvsqm$results, path = "macvsqm_results.xlsx", col_names = TRUE, format_headers = TRUE)
+
+write_xlsx(x =  sup.data.1, path = "supplemental_data.1_combined.xlsx", col_names = TRUE, format_headers = TRUE)
+
+macvhumfilt <- macvhum$results %>% 
+  #janitor::get_dupes(feature) %>% 
+  filter(., qval <= 0.05)
+macvsqmfilt <- macvsqm$results %>% 
+  #janitor::get_dupes(feature) %>% 
+  filter(., qval <= 0.05)
+
+#pval < 0.05 & qval < 0.05 & stderr < 0.3 & N.not.zero >= 8
+mksubsw <- intersect(filter(macvhumfilt)$feature,
+          filter(macvsqmfilt)$feature)
+
+### now that we know which single pathway hits are mutually significantly differentially enriched
+## we can start by subsetting each set of results by these shared paths which show up twice (have an entry for mac and its respective comparison)
+macvhumfilt0 <- filter(macvhumfilt, grepl(paste(mksubsw, collapse="|"), feature)) %>%
+  filter(!grepl('UNMAPPED|UNINTEGRATED', feature))
+
+macvsqmfilt0 <- filter(macvsqmfilt, grepl(paste(mksubsw, collapse="|"), feature)) %>%
+  filter(!grepl('UNMAPPED|UNINTEGRATED', feature))
+
+### then we can take a look at the coef column, group by feature column so we have each comparison
+### and then subtract coef from one another and make that a column
+### NOTE **** THERE WILL BE SOME INSIGNIF HITS, THIS IS BC FOR SOME PAIRS *ONE* DOES HAVE SIGNIFICANT PADJ/PVAL
+# macvhumfilt0 <- macvhumfilt %>% group_by(feature) %>%
+#   filter(all(qval < 0.05 & pval <0.05 & stderr < 0.3)) %>%
+#   filter(coef >= 0.5 | coef <= -0.5)
+#   #filter(max(coef) - min(coef) > 0.5)
+
+# ggplot(macvhumfilt, aes(pathway.y, coef, fill = value)) +
+#   geom_bar(stat = "identity", position = "dodge") +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+# macvsqmfilt0 <- macvsqmfilt %>% group_by(feature) %>%
+#   filter(all(qval < 0.05 & pval <0.05 & stderr < 0.3 ))  %>%
+#   filter(coef >= 0.5 | coef <= -0.5)
+  #filter(max(coef) - min(coef) > 0.5)
+
+# ggplot(macvsqmfilt, aes(pathway.y, coef, fill = value)) +
+#   geom_bar(stat = "identity", position = "dodge") +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+## then we can sort results by descending "coef_diff" column to find the most significantly different pathways
+## are the top n pathways in each comparison dataframe the same after this sorting by coef_diff column?
+#macvsqmfilt0[with(macvsqmfilt0, order(abs(coef_diff))), ]
+library(file2meco)
+library(data.table)
+library(tidyr)
+data(MetaCyc_pathway_map)
+MetaCyc_pathway_map$feature <- rownames(MetaCyc_pathway_map)
+MetaCyc_pathway_map$feature <- gsub("-", ".", MetaCyc_pathway_map$feature)
+
+### reported in PAPER 1
+macvsqmfiltfin <- macvsqmfilt0 %>% separate(feature, into = c("feature", "pathway"), sep = "\\.\\.") %>%
+  separate(., feature, c("feature", "path"), sep = '\\:') %>%
+  left_join(MetaCyc_pathway_map, by = "feature") %>% 
+  filter((qval < 0.05 & pval <0.05   )) %>% 
+  filter(coef >= 1 | coef <= -1)
+macvhumfiltfin <- macvhumfilt0 %>% separate(feature, into = c("feature", "pathway"), sep = "\\.\\.") %>%
+  separate(., feature, c("feature", "path"), sep = '\\:') %>%
+  left_join(MetaCyc_pathway_map, by = "feature") %>%
+  filter((qval < 0.05 & pval <0.05   )) %>% 
+  filter(coef >= 1 | coef <= -1)
+
+#%>% 
+##  filter((qval < 0.05 & pval <0.05   ))  %>%
+#  filter(coef >= 1 | coef <= -1)
+### we don't care about std error  in this case because we know it will drastically reduce hits in the squirrel monkey comparison for the simple fact that there's so much variation in the squirrel monkey compositionally compared to the comparison of mac v. hum
+
+### for this reason, we exclude consideration of std err and favor stringent cutoff values for pval and qval as well as particularly high coeff of variation values, see above.
+#macvhumfilt0 %>% filter(pathway.y %in% intersect(macvsqmfilt0$pathway.y,macvhumfilt0$pathway.y))
+
+
+### 58 paths, all but one of the human 59 total, are shared
+intersect(macvsqmfiltfin$pathway.y,macvhumfiltfin$pathway.y)
+
+## a much larger set of 18 pathways were unique to the squirrel monkey comparison
+setdiff(macvsqmfiltfin$pathway.y,macvhumfiltfin$pathway.y)
+
+### 58 paths, all but one (L-isoleucine biosynthesis III) of the human 59 total are shared
+setdiff(macvhumfiltfin$pathway.y,macvsqmfiltfin$pathway.y)
+
+### now back to those shared paths
+macsqm_commonstat <- macvsqmfiltfin %>% filter(pathway.y %in% intersect(macvsqmfiltfin$pathway.y,macvhumfiltfin$pathway.y))
+machum_commonstat <- macvhumfiltfin %>% filter(pathway.y %in% intersect(macvhumfiltfin$pathway.y,macvsqmfiltfin$pathway.y))
+
+# can pick either to look at for this
+### reported in PAPER 1 "Of the 58 shared pathways, we map a majority to 3 superseding pathway class..."
+data.frame(table(machum_commonstat$Superclass1)) %>% arrange(-Freq)
+
+data.frame(table(machum_commonstat$Superclass2)) %>% arrange(-Freq)
+
+## after sorting each result by the highest coef of variation (most abundant paths in the mac),
+## which of the top n of those pathways are overlapping between model results
+highfill <- intersect(
+  (machum_commonstat %>% arrange(-coef) %>% head(15))$pathway.y,
+  (macsqm_commonstat %>% arrange(-coef) %>% head(15))$pathway.y
+  )
+
+lowfill <- intersect(
+  (machum_commonstat %>% arrange(coef) %>% head(15))$pathway.y,
+  (macsqm_commonstat %>% arrange(coef) %>% head(15))$pathway.y
+  )
+highfill
+lowfill
+
+### do these pathways fall, disproportionately under any particular superseding pathways?
+machum_commonstat %>% filter(pathway.y %in% highfill) %>% pull(Superclass1) %>% table()
+machum_commonstat %>% filter(pathway.y %in% lowfill) #%>% pull(Superclass1) %>% table()
+
+
+machum_commonstat %>% filter(pathway.y %in% highfill) #%>% pull(Superclass2) %>% table()
+machum_commonstat %>% filter(pathway.y %in% lowfill) #%>% pull(Superclass2) %>% table()
+
+
+d1<- data.frame(macvsqm$results)
+d1$testing <- "macvsqm"
+d2<- data.frame(macvhum$results)
+d2$testing <- "macvhum"
+SupplData1<- (rbind(d1,d2) %>% separate(feature, into = c("feature", "pathway"), sep = "\\.\\.") %>%
+  separate(., feature, c("feature", "path"), sep = '\\:') %>%
+  left_join(MetaCyc_pathway_map, by = "feature"))
+library(writexl)
+write_xlsx(SupplData1, "SupplData1.xlsx")
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r, pairwise corncob}
+
+############### Doesn't meet stat assumptions of humann-derived path data since humann does normalization step 
+################ (corncob is built for raw count data)
+################# Use maaslin instead (see above)
+
+# set.seed(100)
+# library(dplyr)
+# library(corncob)
+# library(tibble)
+# library(stringr)
+# ########### comparing mac to hum, pairwise
+# input_metadata_humac <- input_metadata %>% filter(group != "sqm")
+# input_data_humac <- data.frame(round(t(hupath_orig))) %>% select(!c(UNMAPPED, UNINTEGRATED)) %>%
+#   filter(!grepl("SbMm", rownames(.)))
+# 
+# ### not overdispersed normalized counts from pathway analysis so we want to keep phi.formula_null as ~1 and keep phi.formula and formula as ~ group so we test for differential abundance and variability without the need for controlling for over dispersion
+# permutest(vegan::betadisper(dist(input_data_humac),
+#                   input_metadata_humac$group))
+# 
+# corn_da <- differentialTest(formula = ~ group,
+#                             phi.formula = ~ group,
+#                             formula_null = ~ 1,
+#                             phi.formula_null = ~ 1,
+#                             sample_data = input_metadata_humac,
+#                             data = t(input_data_humac),
+#                             test = "Wald", boot = FALSE,
+#                             fdr_cutoff = 0.05)
+# fdr_corncob <- corn_da$significant_taxa
+# dim(data.frame(fdr_corncob))
+# ## pick top 33 of macaque corncob sig hits
+# hits_humac <- sort(corn_da$p_fdr <= 0.05)
+# hits_humac <- data.frame(hits_humac) %>% rownames_to_column() %>% filter(hits_humac == TRUE)
+# humactaxspec <- str_extract(hits_humac$rowname, "s__.*")
+# 
+# humactax <- data.frame(sort(corn_da$p_fdr)) %>% filter(., `sort.corn_da.p_fdr.` <= 0.05)
+# humactax$tax <- rownames(humactax)
+# humactaxtop33 <- data.frame(humactax[1:100,])
+# 
+# ########### comparing mac to sqm, pairwise
+# input_metadata_sqmac <- input_metadata %>% filter(group != "hum")
+# input_data_sqmac <- data.frame(round(t(hupath_orig))) %>% select(!c(UNMAPPED, UNINTEGRATED)) %>%
+#   filter(!grepl("HsMm", rownames(.)))
+# 
+# ### not overdispersed normalized counts from pathway analysis so we want to keep phi.formula_null as ~1 and keep phi.formula and formula as ~ group so we test for differential abundance and variability without the need for controlling for over dispersion
+# permutest(vegan::betadisper(dist(input_data_sqmac),
+#                   input_metadata_sqmac$group))
+# 
+# corn_da <- differentialTest(formula = ~ group,
+#                             phi.formula = ~ group,
+#                             formula_null = ~ 1,
+#                             phi.formula_null = ~ 1,
+#                             sample_data = input_metadata_sqmac,
+#                             data = t(input_data_sqmac),
+#                             test = "Wald", boot = FALSE,
+#                             fdr_cutoff = 0.05)
+# fdr_corncob <- corn_da$significant_taxa
+# dim(data.frame(fdr_corncob))
+# hits_sqmac <- sort(corn_da$p_fdr <= 0.05)
+# hits_sqmac <- data.frame(hits_sqmac) %>% rownames_to_column() %>% filter(hits_sqmac == TRUE)
+# sqmactaxspec <- str_extract(hits_sqmac$rowname, "s__.*")
+# 
+# sqmactax <- data.frame(sort(corn_da$p_fdr)) %>% filter(., `sort.corn_da.p_fdr.` <= 0.05)
+# sqmactax$tax <- rownames(sqmactax)
+# sqmactaxtop33 <- data.frame(sqmactax[1:100,])
+# 
+# humactab <- data.frame(table(sub(".*s__(.*)\\|.*","\\1",humactaxtop33$tax)))
+# humactab$group <- "humac"
+# sqmactab <- data.frame(table(sub(".*s__(.*)\\|.*","\\1",sqmactaxtop33$tax)))
+# sqmactab$group <- "sqmac"
+# 
+# totpack <- data.frame(rbind(humactab, sqmactab))
+# 
+# definers <- totpack[!(duplicated(totpack$Var1)|duplicated(totpack$Var1, fromLast=TRUE)),, drop=FALSE]
+# #mac_defining <- plot_gen %>% group_by(Var1) %>% filter(n_distinct(group) == 1) %>% ungroup() %>% filter(group == "mac")%>% pull(.,"Var1")
+# humac_defining <- definers %>% filter(group == "humac")%>% pull(.,"Var1")
+# sqmac_defining <- definers %>% filter(group == "sqmac")%>% pull(.,"Var1")
+# 
+# 
+# ## gives you only mutually shared taxa from corncob model per donor group
+# humacfin <- humactaxtop33 %>% filter(tax %in% humac_defining) 
+# sqmacfin <- sqmactaxtop33 %>% filter(tax %in% sqmac_defining) 
+# 
+# 
+# ## gives you only mutually shared taxa from corncob model between human and squirrel monkey
+# segway <- totpack %>% group_by(Var1) %>% filter(n()>1) %>% arrange(Var1) %>%
+#  summarise_all(funs(trimws(paste(., collapse = '')))) #%>% filter(group == "humsqm" | group == "sqmhum")
+# 
+# humactaxtop33$group <- "humac"
+# sqmactaxtop33$group <- "sqmac"
+# filter(rbind(humactaxtop33,sqmactaxtop33), tax %in% segway$Var1) %>% pull("tax")
+# 
+# View(data.frame(intersect(humactaxtop33$tax,sqmactaxtop33$tax)))
+
+```
+
+
+
+
+
+
+
+
+
+
+```{r}
+######################### radEmu test!! 
+# #devtools::install_github("statdivlab/radEmu")
+# library(radEmu)
+# 
+# library(corncob)
+# library(tibble)
+# input_metadata$hum <- ifelse(input_metadata$group == "hum", 1, 0)
+# input_metadata$sqm <- ifelse(input_metadata$group == "sqm", 1, 0)
+# input_metadata$mac <- ifelse(input_metadata$group == "mac", 1, 0)
+# tinputdata <- t(input_data)[-1:-2,]
+# 
+# testkj <- make_design_matrix(Y = input_data, formula = ~ hum, data = input_metadata)
+# hum_fit <- emuFit(formula = ~ hum,
+#                   data = input_metadata, 
+#                   Y = input_data,
+#                   run_score_tests = FALSE)
+# hum_robust_score <- emuFit(formula = ~ hum,
+#                            data = input_metadata,
+#                            fitted_model = hum_fit,
+#                            refit = FALSE,
+#                            Y = input_data,
+#                            test_kj = data.frame(k = which("hum" == hum_fit$B %>% rownames),
+#                                                 j = colnames(input_data)
+#                                                 )
+#                            )
+# # emuhumTest <- function(category) {
+# #   hum_robust_score <- emuFit(formula = ~ hum,
+# #                        data = input_metadata,
+# #                        fitted_model = hum_fit,
+# #                        refit = FALSE,
+# #                        Y = input_data,
+# #                        test_kj = data.frame(k = which("hum" == hum_fit$B %>% rownames),
+# #                                             j = colnames(input_data)
+# #                        )
+# # )
+# # return(hum_robust_score)
+# # }
+# # library(parallel)
+# # hum_robust_score <- mclapply(1:5,
+# #                       emuhumTest,
+# #                       mc.cores = 7)
+
+```
+
+
+
+
+
+
+```{r}
+
+# library(dplyr)
+# counts <- read.table("/Users/apulvino/AmatoLab/2_cecal_shotgun/test_mac/features/filtered_data_norm_transformed.tsv", header = TRUE, row.names = 1)
+# 
+# Clos <- input_data[,c(grepl("Clostridium|Clostridioides",colnames(input_data))), drop=F]
+# ###  both of the following yield empty df
+# ### if we're getting DIRECT evidence of bile acid metabolism... it might not be coming from this particular dataset...
+# Clos <- input_data[,c(grep("scindens",colnames(input_data))), drop=F]
+# Clos <- input_data[,c(grep("difficile",colnames(input_data))), drop=F]
+# 
+# fit_data3 = Maaslin2(
+#     input_data = Clos,
+#     input_metadata = input_metadata,
+#     output = "test_sqmacClos",
+#     fixed_effects = c("group", "phys"),
+#     reference = c("group,sqm"),
+#     min_prevalence = 0,
+#     min_abundance = 0
+#     )
+# fit_data4 = Maaslin2(
+#     input_data = Clos,
+#     input_metadata = input_metadata,
+#     output = "test_humacClos",
+#     fixed_effects = c("group", "phys"),
+#     reference = c("group,hum"),
+#     min_prevalence = 0,
+#     min_abundance = 0
+#     )
+# path_res3 <- fit_data3$results
+# path_res4 <- fit_data4$results
+# 
+# View(path_res3 %>% filter(pval < 0.05 &
+#                       qval < 0.05
+#                     & stderr < 0.33
+#                       ))
+# View(path_res4 %>% filter(pval < 0.05 &
+#                       qval < 0.05
+#                     & stderr < 0.33
+#                       ))
+
+
+
+```
+
+
+
+
+
+

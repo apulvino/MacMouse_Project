@@ -1,0 +1,1338 @@
+---
+title: "2_cecal_shotgun"
+output: html_document
+date: "2024-04-05"
+---
+
+Kraken2/Bracken output first
+
+```{r, load packs}
+
+set.seed(1) # for reproducible stochastic processes
+library(devtools)
+#BiocManager::install("phyloseq")
+library(phyloseq)
+library(ggplot2)
+library(readr)
+library(stringr)
+library(tibble)
+library(dplyr)
+library(cowplot) #for combining plots
+library(tidyr)
+library(patchwork) # for combining multiple plots
+#BiocManager::install("microViz")
+#if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+#BiocManager::install(c("phyloseq", "microbiome", "ComplexHeatmap"), update = FALSE)
+# install.packages("microViz", 
+#                  repos = c(davidbarnett = "https://david-barnett.r-universe.dev", getOption("repos")
+#                            )
+#                  )
+# install.packages("ggtext") # for rotated labels on ord_plot() 
+# install.packages("ggraph") # for taxatree_plots()
+# install.packages("DT") # for tax_fix_interactive()
+# install.packages("remotes")
+# remotes::install_github("statdivlab/corncob") # for example datasets and beta binomial models
+library(ggtext)
+library(ggraph)
+library(DT)
+library(data.table)
+library(corncob)
+library(reshape2)
+#BiocManager::install("microbiome")
+library(microbiome)
+#BiocManager::install("ComplexHeatmap")
+library(ComplexHeatmap)
+#install.packages("ggheatmap")
+library(ggheatmap)
+#install.packages("microViz",repos = c(davidbarnett = "https://david-barnett.r-universe.dev", getOption("repos")))
+library(microViz)
+library(ape)
+library(tibble)
+#install.packages("RColorBrewer")
+library(RColorBrewer)
+#install.packages("ggpubr")
+library(ggpubr)
+library(vegan)
+#install_github("pmartinezarbizu/pairwiseAdonis/pairwiseAdonis")
+library(pairwiseAdonis)
+library(gridExtra)
+#install.packages("ggh4x")
+library(ggh4x)
+library(igraph)
+library(writexl)
+
+```
+
+
+
+
+```{r, formatting }
+
+#### making draft otu table
+getwd()
+otu_mat <- data.frame(read_tsv("bracken_abundance_species_mpa.txt"))
+otu_mat <- otu_mat %>% column_to_rownames("X.Classification") %>% as.matrix()
+#otu_mat2 <- otu_mat[,-c(4,5,7,8,10,11,13,15)]
+
+
+### making draft tax table
+taxmat <- data.table(rownames(otu_mat))
+taxmat[, paste0(c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")) := tstrsplit(V1, ",") ]
+taxmat$Kingdom <- str_extract(taxmat$Kingdom, "k__[A-Z]+[a-z]+")
+taxmat$Phylum <- str_extract(taxmat$Phylum, "p__[A-Z]+[a-z]+")
+taxmat$Class <- str_extract(taxmat$Class, "c__[A-Z]+[a-z]+")
+taxmat$Order <- str_extract(taxmat$Order, "o__[A-Z]+[a-z]+")
+taxmat$Family <- str_extract(taxmat$Family, "f__[A-Z]+[a-z]+")
+taxmat$Genus <- str_extract(taxmat$Genus, "g__[A-Z]+[a-z]+")
+taxmat$Species <- str_extract(taxmat$Species, "s__.*")
+taxmat <- taxmat %>% column_to_rownames(var = "V1")
+#taxmat %>% filter(taxmat, taxmat$Species != "NA")
+no<-na.omit(taxmat)
+
+#newnames <- paste(as.vector(taxmatv0[,1]),"\\|",as.vector(taxmatv0[,2]),"\\|",as.vector(taxmatv0[,3]), sep = "")
+#rownames(otu_matv01) <- newnames
+
+#rownames(taxmatv0) <- rownames(otu_matv01)
+#rownames(taxmatv0) <- paste(as.vector(taxmatv0[,1]),"|",as.vector(taxmatv0[,2]),"|",as.vector(taxmatv0[,3]), sep = "")
+#rownames(taxmatv0) <- paste(as.vector(taxmatv0[,1]))
+#rownames(taxmatv0) <- newnames
+
+
+### making draft metadata
+metadata <- read.csv("metadata.txt")
+metadata2 <- metadata[,-1]
+metadata2$file <- metadata2$sample_name
+rownames(metadata2) <- metadata[,1]
+metadata2$sample_name <- paste(metadata2$group, substr(rownames(metadata2), start = 2, stop = 10), sep = "")
+metadata2$file <- metadata2$sample
+metadata2$sample <- metadata2$sample_name
+rownames(metadata2) <- metadata2$sample_name
+
+### fixing otu colnames to match metadata for phyloseq obj init
+colnames(otu_mat) <- metadata2$sample_name
+colnames(otu_mat) <- rownames(metadata2)
+
+### setting up phyloseq obj components
+OTU <- otu_table(as.matrix(otu_mat), taxa_are_rows = TRUE)
+TAX <- tax_table(as.matrix(no))
+META <- sample_data(metadata2)
+
+### init phyloseq obj and print obj overview
+physeq <- phyloseq(OTU, TAX, META)
+#View(physeq@tax_table)
+# used unfiltered data and get same result/can ignore warning for this dataset; results looked the identical
+#View(OTU)
+
+```
+
+
+## Taxonomic barplots and qc
+```{r, preprocessing and top taxonomic compositional abundances}
+
+
+theme_bold <- theme(
+  axis.title.x = element_text(size = 22, face = "bold"),
+  axis.title.y = element_text(size = 22,face = "bold"),
+  axis.text.x = element_text(face = "bold", size = 22),
+  axis.text.y = element_text(size = 22,face = "bold"),
+  legend.title = element_text(size = 22,face = "bold"),
+  legend.text = element_text(size = 22,face = "bold"),
+  plot.title = element_text(size = 22,face = "bold"),
+  strip.text = element_text(size = 22,face = "bold"),
+  axis.line = element_line(size = 3, color = "black")
+)
+
+
+#setwd("/Users/apulvino/AmatoLab/2_cecal_shotgun/")
+# https://joey711.github.io/phyloseq-demo/Restroom-Biogeography
+any(taxa_sums(physeq) == 0)
+sum(taxa_sums(physeq) == 0)
+
+physeq = prune_taxa(taxa_sums(physeq) > 0, physeq)
+
+any(sample_sums(physeq) == 0)
+ps = prune_samples(sample_sums(physeq) > 0, physeq)
+
+readsumsdf = data.frame(nreads = sort(taxa_sums(ps), TRUE), sorted = 1:ntaxa(ps), 
+    type = "OTUs")
+readsumsdf = rbind(readsumsdf, data.frame(nreads = sort(sample_sums(ps), 
+    TRUE), sorted = 1:nsamples(ps), type = "Samples"))
+
+p = ggplot(readsumsdf, aes(x = sorted, y = nreads)) + geom_bar(stat = "identity")
+p + ggtitle("Total Number of Reads per Sample") + scale_y_log10() + facet_wrap(~type, 1, scales = "free") + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+  xlab("Sample") + ylab("Number of Reads")
+
+#ps = prune_samples(sample_sums(ps) > 500, ps)
+
+## Transform to equal sample sum
+#library(compositions)
+#psP = transform_sample_counts(ps, function(OTU) clr(OTU))
+psP = transform_sample_counts(ps, function(OTU) OTU/sum(OTU) * 100)
+
+# par(mfrow = c(1, 2))
+# title = "Sum of reads for each sample"
+# plot(sort(sample_sums(psP), TRUE), type = "h", main = title, ylab = "reads", 
+#     ylim = c(0, 1000))
+# title = "Sum of reads for each sample"
+# plot(sort(sample_sums(psP), TRUE), type = "h", main = title, ylab = "reads", 
+#     ylim = c(0, 1000))
+top19otus = names(sort(taxa_sums(psP), TRUE)[1:55])
+taxtab19 =data.frame( cbind(tax_table(psP), top20 = "Subsequent Taxa"))
+taxtab19[top19otus, "top20"] <- as(tax_table(psP)[top19otus, "Genus"], 
+    "character")
+taxtab19$top20<- sub("g__", "",taxtab19$top20)
+
+A1leg.ttl = 2.5
+A1leg.txt =2.5
+A1axis.ttl.y = 2.5
+A1axis.txt.y =2.5
+A1hum = 1
+A1mac = 1
+A1sqm = 1
+A1strip.txt = 28
+
+# PAPER 1
+# 20 top genera
+tax_table(psP) <- tax_table(as.matrix(taxtab19))
+jpeg("qual2_taxplot1.jpeg", units="in", width=20, height=12, res=300)
+phyloseq::plot_bar(psP, fill = "top20") + 
+  theme(legend.title = element_text(size = rel(A1leg.ttl), face = "bold"),
+        legend.text = element_text(size = rel(A1leg.txt), face = "bold", color = "black"),
+        axis.text.x = element_blank(),
+        axis.title.y = element_text(size = rel(A1axis.ttl.y), face = "bold", color = "black"),
+        axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1, size = rel(A1axis.txt.y), color = "black", face = "bold"),
+        #axis.title.x = element_text(size = rel(1.5)),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        #strip.background = element_rect(fill="black"),
+        strip.text=element_text(color="black", face = "bold", size = A1strip.txt)
+        )  + 
+  scale_y_continuous(expand = c(0,0)) +
+  expand_limits(y=100.25) +
+  xlab("Donor Group") + 
+  ylab("Percent Abundance") +
+  scale_fill_manual("Top 20 Abundant Genera",values = colorRampPalette(brewer.pal(8, "Dark2"))(21)) +
+  ggh4x::facet_wrap2(~group,
+                     scales = "free_x",
+                     strip = strip_themed(background_x = list(hum = element_rect(fill = "#1b9e77", size = A1hum),
+                                                              mac = element_rect(fill = "#a6761d", size = A1mac),
+                                                              sqm = element_rect(fill = "#666666", size = A1sqm)
+                                                              )
+                                          )
+                     )
+
+dev.off()
+
+psP = transform_sample_counts(ps, function(OTU) OTU/sum(OTU) * 100)
+top19otus = names(sort(taxa_sums(psP), TRUE)[1:20])
+taxtab19 =data.frame( cbind(tax_table(psP), top20 = "Subsequent Taxa"))
+taxtab19[top19otus, "top20"] <- as(tax_table(psP)[top19otus, "Species"], 
+    "character")
+taxtab19$top20 <- taxtab19$top20 %>%
+  stringr::str_replace("^s__", "") %>%
+  stringr::str_replace_all("_", " ")
+
+
+#### write out phyloseq obj for HsMmSb_MouseRNAseq.Rmd/for initial spearman dim red analysis PAPER 1
+write_rds(psP, "C:/Users/willh/OneDrive - Loyola University Chicago/Documents/Mouse_data_AnthonyP2025/LiverRNAseqPackage_19082025/LiverRNAseqPackage_19082025/psP.Rds")
+
+
+##work on making font bigger and plots wider
+
+A2leg.ttl = 2.25
+A2leg.txt =2.25
+A2axis.ttl.y = 2.5
+A2axis.txt.y = 3
+A2hum = 1
+A2mac = 1
+A2sqm = 1
+A2strip.txt = 28
+
+#set labels
+label_vec <- c("hum", "mac", "sqm")
+styled_labels <- setNames(
+  paste0("<span style='color:white; text-shadow:-1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black, 1px 1px 0 black;'>", label_vec, "</span>"),
+  label_vec
+)
+
+facet_wrap2(~group, labeller = as_labeller(styled_labels))
+
+## abundance plot for top 10
+# PAPER 1
+# 20 top species
+tax_table(psP) <- tax_table(as.matrix(taxtab19))
+# sample_data(psP) <- data.frame(sample_data(psP)) %>%
+  # mutate(group = case_when(group %in% "hum" ~ "human",
+   #                                group %in% "mac" ~ "macaque",
+    #                               group %in% "sqm" ~ "squirrel monkey"
+     #                              ))
+tiff("qual2_taxplot2.black.tiff", units="in", width=20, height=10, res=300)
+ phyloseq::plot_bar(psP, fill = "top20") + 
+  theme(legend.title = element_text(size = rel(A2leg.ttl), face = "bold"),
+        legend.text = element_text(size = rel(A2leg.txt), face = "bold", color = "black"),
+        #axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = rel(1.5), color = "black"),
+        axis.text.x = element_blank(),
+        axis.title.y = element_text(size = rel(A2axis.ttl.y), face = "bold", colour = "black"),
+        axis.text.y = element_text(angle = 0, vjust = 0.5, hjust=1, size = rel(A2axis.txt.y), color = "black", face = "bold"),
+        #axis.title.x = element_text(size = rel(1.5)),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        axis.line = element_line(colour = "black"),
+        #strip.background = element_rect(fill="black"),
+        strip.text = ggtext::element_markdown(face = "bold", size = A2strip.txt)
+        ) +
+  scale_y_continuous(expand = c(0,0)) +
+  expand_limits(y=100.25) +
+  xlab("Donor Group") + 
+  ylab("Percent Abundance") +
+  scale_fill_manual("Top 20 Abundant Species",values = colorRampPalette(brewer.pal(8, "Dark2"))(21))+
+  ggh4x::facet_wrap2(~group,
+                     scales = "free_x",
+                     strip = strip_themed(background_x = list(hum = element_rect(fill = "#1b9e77"),
+                                                              mac = element_rect(fill = "#a6761d"),
+                                                              sqm = element_rect(fill = "#666666") +theme_bold 
+                                                              )
+                                          )
+                     )
+
+
+
+dev.off()
+
+
+
+# write csv for tax table
+#write.csv(taxtab19, "taxtab19.csv")
+
+
+```
+
+
+## Dim. reduction/plot
+
+```{r, sample distances, dim red, PCoA/nmds}
+
+library(ggrepel)
+set.seed(123)
+#options(device = "quartz")
+## sample distance
+# PAPER 1
+
+p1axis.txt = 27
+p1axis.ttl = 22
+p1plot.ttl = 22
+p1elipse.size = 2
+p1mac.label = 8
+p1hum.label = 8
+p1sqm.label = 8
+
+psp_ord = ordinate(psP, "NMDS", "bray")
+tiff("qual2_distplot1.good.tiff", units="in", width=8, height=8, res=300)
+bray <- plot_ordination(psP, psp_ord, color = "group", type = "group") + 
+  geom_point(size = 6, alpha = 0.7, stat = "identity") + 
+  stat_ellipse(size = p1elipse.size) + 
+  theme(panel.grid.major = element_blank(), aspect.ratio = 1/2.5, panel.grid.minor = element_blank(),
+        panel.background = element_blank(), axis.line = element_line(colour = "black", size = 4), axis.text = element_text(size = p1axis.txt, face = "bold", colour = "black"), axis.title = element_text(size = p1axis.ttl, face = "bold"), plot.title = element_text(size = p1plot.ttl, face = "bold", hjust = 0.5),
+        legend.position="none") +
+  labs(title = "NMDS of Bray-Curtis distance", "Donor Group\n" )+ 
+  annotate("text",  x = 0.1, y = -0.35, label = "sqm", color  = "#666666", fontface = "bold", size = p1sqm.label) +
+  annotate("text", x = -0.38, y = 0.25, label = "hum", color = "#1b9e77", fontface = "bold", size = p1hum.label) +
+  annotate("text", x = 1.2, y = 0.43, label = "mac", color = "#a6761d", fontface = "bold", size = p1mac.label) +
+  scale_color_manual(values = c(hum="#1b9e77",mac="#a6761d",sqm="#666666"))
+
+bray
+
+dev.off()
+
+######### anybody and everybody
+#psp_ord = ordinate(psP, "PCoA", "bray")
+#tiff("qual2_distplot2.tiff", units="in", width=11, height=11, res=300)
+#plot_ordination(psP, psp_ord, color = "group", type = "sites")+
+#  geom_point(size = 6, alpha = 0.7, stat = "identity") +
+ # stat_ellipse(type = "t", linetype = "solid", size = 0.8) +
+#  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+ #       panel.background = element_blank(), axis.line = element_line(colour = "black"),
+  #      legend.position = "none") +
+  #labs(title = "PCoA of Bray-Curtis distance", color = "Donor Group\n")+ 
+  #annotate("text", x = 0.10, y = -0.3, label = "sqm", color = "#666666") +
+  #annotate("text", x = 0.35, y = 1, label = "mac", color = "#a6761d") +
+  #annotate("text", x = -0.22, y = 0.27, label = "hum", color = "#1b9e77")  +
+#  scale_color_manual(values = c(hum="#1b9e77",mac="#a6761d",sqm="#666666")) 
+#dev.off()
+
+
+
+```
+
+
+## Shannon plots 
+```{r}
+## PAPER 1
+# shannon alpha div
+shannonp <- plot_richness(physeq, x="group", measures=c("Shannon")) 
+
+
+theme_bold <- theme(
+  axis.title.x = element_text(size = 22, face = "bold"),
+  axis.title.y = element_text(size = 22,face = "bold"),
+  axis.text.x = element_text(face = "bold", size = 22),
+  axis.text.y = element_text(size = 22,face = "bold"),
+  legend.title = element_text(size = 22,face = "bold"),
+  legend.text = element_text(size = 22,face = "bold"),
+  plot.title = element_text(size = 22,face = "bold"),
+  strip.text = element_text(size = 22,face = "bold"),
+  axis.line = element_line(size = 3, color = "black")
+)
+
+
+ap1 <- ggboxplot(shannonp$data, x = "group", y = "value", size = 2,
+          color = "group", order = c("hum", "mac","sqm")) +
+  stat_compare_means(aes(group = group) , method = 'wilcox.test', label = "p.signif", bracket.size = 2,
+                     comparisons = list( c("hum", "mac"), c("sqm", "mac")), size = 7,
+                      vjust = .5 , label.y = 4.6, label.x = 8, step.increase = .1
+             ) +  
+  xlab("") + ylab("") + ggtitle("Shannon Diversity") +
+  geom_point(stat = "identity") +
+  scale_color_manual(values = c(hum="#1b9e77",mac="#a6761d",sqm="#666666"),guide = "none") +
+  theme(aspect.ratio = 1/2,legend.position="none") + theme_bold + theme(
+    aspect.ratio = 1/2,
+    legend.position = "none",
+    axis.text.x = element_text(face = "bold", size = 22),
+    axis.title.x = element_text(size = 22, face = "bold"),
+    axis.ticks.x = element_line(size = 3, color = "black")
+  ) + theme_bold
+
+#to save un comment these lines!!
+#ap1
+#ggsave("shannondiversity.11.tiff", device = "jpeg")
+
+ap2 <- ggboxplot(plot_richness(physeq, x="group", measures=c("Simpson"))$data,
+          x = "group", y = "value", size = 2, color = "group", order = c("hum", "mac","sqm")) +
+  stat_compare_means(aes(group = group), method = 'wilcox.test', label = "p.signif", bracket.size = 2,
+                     comparisons = list( c("hum", "mac"), c("sqm", "mac")), size = 5.5,
+                      vjust = .5 ,  step.increase = .1
+  ) + 
+  xlab("") + ylab("") + ggtitle("Simpson Diversity") +
+  geom_point(stat = "identity") +
+  scale_color_manual(values = c(hum="#1b9e77",mac="#a6761d",sqm="#666666")) +
+  theme(legend.position="none",
+        axis.text.x = element_blank(),  
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank()) + theme_bold+ theme(
+    aspect.ratio = 1/2,
+    legend.position = "none",
+    axis.text.x = element_text(face = "bold", size = 22),
+    axis.title.x = element_text(size = 22, face = "bold"),
+    axis.ticks.x = element_line(size = 3, color = "black")
+  ) + theme_bold
+
+ap3 <- ggboxplot(plot_richness(physeq, x="group", measures=c("Chao1"))$data,
+          x = "group", y = "value", size = 2,color = "group", order = c("hum", "mac","sqm")) +
+  stat_compare_means(aes(group = group), method = 'wilcox.test', label = "p.signif", bracket.size = 2,
+                     comparisons = list( c("hum", "mac"), c("sqm", "mac")), size = 4.4,
+                      vjust = ,  step.increase = .1
+  ) + 
+  xlab("") + ylab("") + ggtitle("Chao Diversity") +
+  geom_point(stat = "identity") +
+  scale_color_manual(values = c(hum="#1b9e77",mac="#a6761d",sqm="#666666")) +
+  theme(legend.position="none")  + theme_bold+ theme(
+    aspect.ratio = 1/2,
+    legend.position = "none",
+    axis.text.x = element_text(face = "bold", size = 22),
+    axis.title.x = element_text(size = 22, face = "bold"),
+    axis.ticks.x = element_line(size = 3, color = "black")
+  ) + theme_bold
+
+ap4 <- ggboxplot(plot_richness(physeq, x="group", measures=c("Observed"))$data,
+          x = "group", y = "value", size = 2, color = "group", order = c("hum", "mac","sqm")) +
+  stat_compare_means(aes(group = group),
+                     method = 'wilcox.test',
+                     label = "p.signif",
+                     bracket.size = 2,
+                     comparisons = list( c("hum", "mac"), c("sqm", "mac")), size = 5.5,
+                      vjust = .5 , step.increase = .1) + 
+  xlab("") + ylab("") + ggtitle("Observed Diversity") +
+  geom_point(stat = "identity") +
+  scale_color_manual(values = c(hum="#1b9e77",mac="#a6761d",sqm="#666666")) +
+  theme(legend.position="none") + theme_bold + theme(
+    aspect.ratio = 1/2,
+    legend.position = "none",
+    axis.text.x = element_text(face = "bold", size = 22),
+    axis.title.x = element_text(size = 22, face = "bold"),
+    axis.ticks.x = element_line(size = 3, color = "black")
+  ) + theme_bold
+
+tiff("diversity.comp.tiff", units="in", width=12, height=8, res=300)
+
+grid.arrange(ap1, ap2, ap3, ap4,nrow=2 )
+
+dev.off
+
+
+```
+
+
+
+
+
+
+```{r, permanova}
+
+
+
+META$mac <- if_else(data.frame(META)$group == "mac", 1, 0)
+META$hum <- if_else(data.frame(META)$group == "hum", 1, 0)
+META$sqm <- if_else(data.frame(META)$group == "sqm", 1, 0)
+## permanova stats
+## broader effect of group, significant
+print("global (all three groups) microbiome dataset permanova for effect of group")
+global_permS1 <- adonis2(phyloseq::distance(psP, method = "bray") ~ group,
+        data=data.frame(META),
+        by = "margin",
+        permutations = 5000)
+
+print(global_permS1)
+
+write_xlsx(global_permS1, path = "Global_permS1.xlsx")
+
+# ## pairwise b/w groups
+# pairwise.adonis(phyloseq::distance(psP, method = "bray"), data.frame(META)$group,
+#                 sim.method = "bray",
+#                 p.adjust.m = "bonferroni")
+### humac pairwise permanova
+print("human- vs. macaque-donor microbiome permanova")
+phylo_humac <- subset_samples(psP, group == "mac" | group == "hum")
+pairw_humacS3 <- adonis2(phyloseq::distance(phylo_humac, method = "bray") ~ group,
+        data=data.frame(META) %>% filter(group != "sqm"),
+        by = "margin",
+        permutations = 5000)
+
+print(pairw_humacS3)
+
+write_xlsx(pairw_humacS3, path = "Pairw_humacS3.xlsx")
+
+### sqmac pairwise permanova
+print("squirrel monkey- vs. macaque-donor microbiome permanova")
+phylo_sqmac <- subset_samples(psP, group == "mac" | group == "sqm")
+pairw_sqmacs2 <- adonis2(phyloseq::distance(phylo_sqmac, method = "bray") ~ group,
+        data=data.frame(META) %>% filter(group != "hum"),
+        by = "margin",
+        permutations = 5000)
+
+print(pairw_sqmacs2)
+
+write_xlsx(pairw_sqmacs2, path = "Pairw_sqmacs2.xlsx")
+
+```
+
+
+
+
+
+
+
+```{r, corncob in pairwise for paper 1}
+
+
+set.seed(100)
+########### comparing mac to hum, pairwise; the corncob model is set up to test differential abundance (formula) and variability (phi.formula) while controlling for the effect of group on dispersion (phi.formula null) 
+## in the manner it's currently written
+##https://cran.r-project.org/web/packages/corncob/vignettes/corncob-intro.html
+sample_data(ps)$group <- relevel(factor(sample_data(ps)$group), ref = "mac")
+ps_humac <- subset_samples(ps, group %in% c("mac", "hum"))
+otu_table(ps_humac) <- (otu_table(ps_humac))
+
+# beta diverisity dispersion is  significant/"overdispersed", so we change phi.formula_null = ~ group rather than ~ 1
+permutest(vegan::betadisper(phyloseq::distance(ps_humac, method = "bray"),
+                  phyloseq::sample_data(ps_humac)$group))
+
+corn_da_humac <- differentialTest(formula = ~ group,
+                            phi.formula = ~ group,
+                            formula_null = ~ 1,
+                            phi.formula_null = ~ group,
+                            data = ps_humac,
+                            test = "Wald", boot = FALSE,
+                            fdr_cutoff = 0.001)
+
+#write out to rnaseq uncomment next line
+
+#write_rds(corn_da_humac,"C:/Users/willh/OneDrive - Loyola University Chicago/Documents/Mouse_data_AnthonyP2025/LiverRNAseqPackage_19082025/LiverRNAseqPackage_19082025/corn_da_humac" )
+
+fdr_corncob_humac <- corn_da_humac$significant_taxa
+dim(data.frame(fdr_corncob_humac))
+## pick top 33 of macaque corncob sig hits
+hits_humac <- sort(corn_da_humac$p_fdr < 0.001)
+hits_humac <- data.frame(hits_humac) %>% rownames_to_column() %>% filter(hits_humac == TRUE)
+humactaxspec <- str_extract(hits_humac$rowname, "s__.*")
+
+humactax <- data.frame(sort(corn_da_humac$p_fdr)) %>% filter(., `sort.corn_da_humac.p_fdr.` < 0.001)
+humactax$tax <- rownames(humactax)
+humactaxtop <- data.frame(humactax[1:870,])
+
+
+########### comparing mac to sqm, pairwise
+sample_data(ps)$group <- relevel(factor(sample_data(ps)$group), ref = "mac")
+ps_sqmac <- subset_samples(ps, group %in% c("mac", "sqm"))
+otu_table(ps_sqmac) <- (otu_table(ps_sqmac))
+
+# beta diverisity dispersion is significant/"overdispersed", so we keep phi.formula_null = ~ group, rather than modifying to ~ 1
+permutest(vegan::betadisper(phyloseq::distance(ps_sqmac, method = "bray"),
+                  phyloseq::sample_data(ps_sqmac)$group))
+
+corn_da_sqmac <- differentialTest(formula = ~ group,
+                            phi.formula = ~ group,
+                            formula_null = ~ 1,
+                            phi.formula_null = ~ group,
+                            data = ps_sqmac,
+                            test = "Wald", boot = FALSE,
+                            fdr_cutoff = 0.001)
+fdr_corncob_sqmac <- corn_da_sqmac$significant_taxa
+dim(data.frame(fdr_corncob_sqmac))
+hits_sqmac <- sort(corn_da_sqmac$p_fdr < 0.001)
+hits_sqmac <- data.frame(hits_sqmac) %>% rownames_to_column() %>% filter(hits_sqmac == TRUE)
+sqmactaxspec <- str_extract(hits_sqmac$rowname, "s__.*")
+#write out to rna seq
+write_rds(corn_da_sqmac,"C:/Users/willh/OneDrive - Loyola University Chicago/Documents/Mouse_data_AnthonyP2025/LiverRNAseqPackage_19082025/LiverRNAseqPackage_19082025/corn_da_sqmac" )
+
+
+sqmactax <- data.frame(sort(corn_da_sqmac$p_fdr)) %>% filter(., `sort.corn_da_sqmac.p_fdr.` < 0.001)
+sqmactax$tax <- rownames(sqmactax)
+sqmactaxtop <- data.frame(sqmactax[1:870,])
+
+humactab <- data.frame(table(sub(".*s__(.*)\\|.*","\\1",humactax$tax)))
+humactab$group <- "humac"
+sqmactab <- data.frame(table(sub(".*s__(.*)\\|.*","\\1",sqmactax$tax)))
+sqmactab$group <- "sqmac"
+
+totpack <- data.frame(rbind(humactab, sqmactab))
+
+definers <- totpack[!(duplicated(totpack$Var1)|duplicated(totpack$Var1, fromLast=TRUE)),, drop=FALSE]
+## gives you only mutually, shared taxa from pwise comparisons from each corncob model 
+humacfin <- humactax %>% filter(tax %in% 
+                                  (definers %>% filter(group == "humac")%>% pull(.,"Var1")))
+sqmacfin <- sqmactax %>% filter(tax %in% 
+                                  (definers %>% filter(group == "sqmac")%>% pull(.,"Var1"))) 
+
+
+```
+
+## corncob model plotting
+
+```{r, plotting on corncob for paper 1}
+
+####### now we need to focus on publication quality figures
+####### this means filtering each corncob res object by mutual taxa and plotting top 10 or so side by side...
+glance_significant_models <- function(corncob_results){
+  df <- data.frame()
+  for(i in 1:length(corncob_results$significant_taxa)){
+    taxa_name <- corncob_results$significant_taxa[i]
+    taxa_df <- corncob_results$significant_models[[i]]$coefficients %>%
+      as.data.frame() %>%
+      rownames_to_column("covariate") %>%
+      mutate(taxa_name = taxa_name)
+    df <- bind_rows(df, taxa_df)
+  }
+  df <- janitor::clean_names(df) %>%
+    select(covariate, estimate, std_error, t_value, fdr = pr_t, taxa_name)
+  return(df)
+}
+
+mutual_taxa_total <- 
+  intersect(
+    glance_significant_models(corn_da_sqmac) %>%
+      #filter(t_value < -3 | t_value > 3) %>%
+      filter(fdr < 0.05 & std_error < 0.3) %>%
+      #filter(!grepl("Intercept", covariate)) %>%
+      pull(taxa_name),
+    
+    glance_significant_models(corn_da_humac) %>%
+      #filter(t_value < -3 | t_value > 3) %>%
+      filter(fdr < 0.05 & std_error < 0.3) %>%
+      #filter(!grepl("Intercept", covariate))%>%
+      pull(taxa_name)
+) 
+
+subset_corncob_result_full <- function(result, taxa_to_keep, subset_data = TRUE) {
+  taxa_to_keep <- intersect(names(result$p), taxa_to_keep)
+
+  result$p <- result$p[taxa_to_keep]
+  result$p_fdr <- result$p_fdr[taxa_to_keep]
+
+  #taking care of the subset on significant_models slot
+  #and this is actually enough for plotting going fwd
+  #because i think corncob plot fxn natively uses sig taxa
+  names(result$significant_models) <- result[["significant_taxa"]]
+   result[["significant_taxa"]] <- names(result$p_fdr)
+   if (!is.null(result$significant_models)) {
+     result$significant_models <- result$significant_models[
+       intersect(names(result$significant_models), taxa_to_keep)
+     ]
+   }
+  return(result)
+}
+
+# genct <- glance_significant_models(corn_da_sqmac) %>%
+#       #filter(t_value < -5 | t_value > 5) %>% 
+#       #filter(fdr < 0.05 & std_error < 0.3) %>%
+#       filter(!grepl("Intercept", covariate)) 
+
+# these are the top 5 genera
+# sub(".*g__(.*)\\|.*","\\1",mutual_taxa) %>% 
+#   table() %>%
+#   sort() %>% tail(5)
+
+#Of the mutual taxa Clostridia and Bacteroidia by far out-number the rest, Bacilli, Gammaproteobacteria dbl digits
+#table(sub(".*c__(.*?)\\|.*", "\\1", mutual_taxa_total))
+topclass <- c("Alphaproteobacteria", "Bacilli", "Bacteroidia", "Clostridia", "Gammaproteobacteria")
+mutual_class <- sub(".*c__(.*?)\\|.*", "\\1", mutual_taxa_total)
+### at order level we have raw count dominance of Bacteroidales, Lachnospirales, and Eubacteriales; the rest don't make double digits
+#table(sub(".*o__(.*?)\\|.*", "\\1", mutual_taxa_total))
+toporder <- c("Bacteroidales", "Eubacteriales", "Lachnospirales")
+mutual_order <- sub(".*f__(.*?)\\|.*", "\\1", mutual_taxa_total)
+### family level: Lachnospiraceae(20 ct.);Clostridiaceae(18 ct.);Prevotellaceae(15 ct.);Bacteroidaceae(14 ct.);Oscillospiraceae (10 ct.)
+data.frame(table(sub(".*f__(.*?)\\|.*", "\\1", mutual_taxa_total))) %>% filter(Freq > 10)
+topfamily <- c("Bacteroidaceae","Clostridiaceae","Lachnospiraceae","Oscillospiraceae","Flavobacteriaceae","Prevotellaceae","Sphingobacteriaceae")
+mutual_family <- sub(".*f__(.*?)\\|.*", "\\1", mutual_taxa_total)
+### genera: Bacteroides Clostridium Prevotella
+#table(sub(".*g__(.*)\\|.*","\\1",mutual_taxa_total))
+#topgenera <- c("Bacteroides", "Clostridium", "Prevotella")
+topgenera <- c("Bacteroides", "Clostridium", "Prevotella")
+mutual_genera <- sub(".*g__(.*)\\|.*","\\1",mutual_taxa_total)
+
+    
+ # tiff("corncob.family.1v1.tiff", units="in", width=12, height=10, res=300)
+  
+for (taxlvl in unique(topfamily)) 
+  
+  taxa_to_plot <- grep(taxlvl, mutual_taxa_total, value = TRUE)
+  
+  sqmac_subset <- subset_corncob_result_full(corn_da_sqmac, taxa_to_plot)
+  humac_subset <- subset_corncob_result_full(corn_da_humac, taxa_to_plot)
+
+  species_labels <- stringr::str_extract(taxa_to_plot, "s__[^|]+$")
+  #names(species_labels) <- taxa_to_plot
+
+  
+  
+#to export corncob plots as panels follow below  
+  
+library(ggplot2)
+library(patchwork)
+library(gridExtra)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(tibble)
+
+# ... your glance_significant_models(), subset_corncob_result_full(), and data prep above ...
+
+plot_list <- list()
+
+# drop "Flavobacteriaceae" and other families from the loop set
+for (taxlvl in setdiff(unique(topfamily), c("Flavobacteriaceae", "Oscillospiraceae", "Clostridiaceae", "Prevotellaceae","Sphingobacteriaceae"))) {
+
+  taxa_to_plot <- grep(taxlvl, mutual_taxa_total, value = TRUE)
+
+  sqmac_subset <- subset_corncob_result_full(corn_da_sqmac, taxa_to_plot)
+  humac_subset <- subset_corncob_result_full(corn_da_humac, taxa_to_plot)
+
+  species_labels <- stringr::str_extract(taxa_to_plot, "s__[^|]+$") %>%
+  stringr::str_replace("^s__", "")  %>%
+  stringr::str_replace_all("_", " ")
+
+
+  fg1 <- plot(sqmac_subset) +
+    scale_y_discrete(labels = species_labels) +
+    scale_x_continuous(limits = c(-6, 6), breaks = seq(-6, 6, by = 2)) +
+      theme(
+      strip.background = element_blank(),
+      strip.text = element_blank(),
+      axis.text.y = element_text(size = 16),
+      axis.text.x = element_text(size = 16),
+      plot.title = element_text(size = 26)
+    ) +
+    guides(color = "none") +
+    ggtitle(paste0("Family: ", taxlvl), subtitle = "Mac v Sqm") +
+    theme( 
+      plot.margin = margin(t = 0, r = 0, b = 0, l = 30),
+      plot.title = element_text(face = "bold", size = 28, hjust = .5),
+      axis.title.y = element_blank(),
+      axis.text.y = element_text(colour = "black", face = "bold"),
+      axis.line = element_line(size = 3, colour = "black"),
+      axis.title.x = element_text(face = "bold"),
+      plot.subtitle = element_text(face = "bold", size = 24, color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.text.x.bottom = element_text(face = "bold", color = "black"),
+      panel.border = element_rect(colour = "black", fill = NA, size = 5)
+    )
+
+  fg2 <- plot(humac_subset) +
+    scale_y_discrete(labels = species_labels) +
+    scale_x_continuous(limits = c(-6, 6), breaks = seq(-6, 6, by = 2)) +
+      theme(
+      strip.background = element_blank(),
+      strip.text = element_blank(),
+      axis.text.y = element_blank(),
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(size = 14),
+      plot.title = element_text(size = 22),
+      axis.ticks.y = element_blank()) +
+    guides(color = "none") +
+    ggtitle("", subtitle = "Mac v Hum") +
+    theme(
+      plot.title = element_text(face = "bold", size = 28, hjust = .5),
+      axis.title.y = element_blank(),
+      axis.line = element_line(size = 3, colour = "black"),
+      axis.title.x = element_text(face = "bold"),
+      plot.subtitle = element_text(face = "bold", size = 24, color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.text.x.bottom = element_text(color = "black", face = "bold"),
+      panel.border = element_rect(colour = "black", fill = NA, size = 5)
+    ) +
+    ylab(NULL)
+
+  combined_plot <- fg1 + fg2 + plot_layout(ncol = 2, guides = "collect")
+
+  # store the finished patchwork
+  plot_list[[length(plot_list) + 1]] <- combined_plot
+}
+
+# build the grid
+ncol_grid <- 2
+nrow_grid <- ceiling(length(plot_list) / ncol_grid)
+
+final_grid <- wrap_plots(plot_list, ncol = ncol_grid) 
+
+# save all at once
+ggsave(
+  filename = "corncob_families_excluding.seperated.tiff",
+  plot = final_grid,
+  width = 10 * ncol_grid,
+  height = 7 * nrow_grid,
+  dpi = 300
+)
+
+#effort to put all plots into a grid
+
+
+
+
+```
+
+
+
+
+## corncob Suppl model plotting
+
+```{r, plotting on corncob for paper 1}
+
+####### now we need to focus on publication quality figures for supplemental
+
+plot_list2 <- list()
+
+target_families <- c("Flavobacteriaceae", "Clostridiaceae", "Prevotellaceae", "Oscillospiraceae")
+
+for (taxlvl2 in target_families) {
+  
+    taxa_to_plot <- grep(taxlvl2, mutual_taxa_total, value = TRUE)
+  sqmac_subset <- subset_corncob_result_full(corn_da_sqmac, taxa_to_plot)
+  humac_subset <- subset_corncob_result_full(corn_da_humac, taxa_to_plot)
+
+  species_labels <- stringr::str_extract(taxa_to_plot, "s__[^|]+$") %>%
+    stringr::str_replace("^s__", "") %>%
+    stringr::str_replace_all("_", " ")
+
+     fg3 <- plot(sqmac_subset) +
+    scale_y_discrete(labels = species_labels) +
+    scale_x_continuous(limits = c(-6, 6), breaks = seq(-6, 6, by = 2)) +
+      theme(
+      strip.background = element_blank(),
+      strip.text = element_blank(),
+      axis.text.y = element_text(size = 14.5),
+      axis.text.x = element_text(size = 16),
+      plot.title = element_text(size = 26)
+    ) +
+    guides(color = "none") +
+    ggtitle(paste0("Family: ", taxlvl2), subtitle = "Mac v Sqm") +
+    theme( 
+      plot.margin = margin(t = 0, r = 0, b = 0, l = 30),
+      plot.title = element_text(face = "bold", size = 28, hjust = .5),
+      axis.title.y = element_blank(),
+      axis.text.y = element_text(colour = "black", face = "bold"),
+      axis.line = element_line(size = 3, colour = "black"),
+      axis.title.x = element_text(face = "bold"),
+      plot.subtitle = element_text(face = "bold", size = 24, color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.text.x.bottom = element_text(face = "bold", color = "black"),
+      panel.border = element_rect(colour = "black", fill = NA, size = 5)
+    )
+
+  fg4 <- plot(humac_subset) +
+    scale_y_discrete(labels = species_labels) +
+    scale_x_continuous(limits = c(-6, 6), breaks = seq(-6, 6, by = 2)) +
+      theme(
+      strip.background = element_blank(),
+      strip.text = element_blank(),
+      axis.text.y = element_blank(),
+      axis.title.y = element_blank(),
+      axis.text.x = element_text(size = 14),
+      plot.title = element_text(size = 22),
+      axis.ticks.y = element_blank()) +
+    guides(color = "none") +
+    ggtitle("", subtitle = "Mac v Hum") +
+    theme(
+      plot.title = element_text(face = "bold", size = 28, hjust = .5),
+      axis.title.y = element_blank(),
+      axis.line = element_line(size = 3, colour = "black"),
+      axis.title.x = element_text(face = "bold"),
+      plot.subtitle = element_text(face = "bold", size = 24, color = "black"),
+      axis.ticks = element_line(color = "black"),
+      axis.text.x.bottom = element_text(color = "black", face = "bold"),
+      panel.border = element_rect(colour = "black", fill = NA, size = 5)
+    ) +
+    ylab(NULL)
+
+  combined_plot2 <- fg3 + fg4 + plot_layout(ncol = 2, guides = "collect")
+  plot_list2[[length(plot_list2) + 1]] <- combined_plot2
+}
+
+
+# build the grid
+ncol_grid <- 2
+nrow_grid <- ceiling(length(plot_list2) / ncol_grid)
+
+
+final_grid2 <- wrap_plots(plot_list2, ncol = 2)
+ggsave("corncob_selected_supp_families.tiff", plot = final_grid2,
+       width = 10 * 2, height = 8 * ceiling(length(plot_list2) / 2), dpi = 300)
+
+
+```
+
+
+
+## microbiome co-abundance network -- corncob microbes
+human v macaque
+
+```{r }
+
+set.seed(123)
+mutual_taxa_total <-
+  intersect(
+    glance_significant_models(corn_da_sqmac) %>%
+      filter(t_value < -3 | t_value > 3) %>%
+      filter(fdr < 0.1 & std_error < 0.3) %>%
+      filter(!grepl("Intercept", covariate)) %>%
+      pull(taxa_name),
+
+    glance_significant_models(corn_da_humac) %>%
+      filter(t_value < -3 | t_value > 3) %>%
+      filter(fdr < 0.1 & std_error < 0.3) %>%
+      filter(!grepl("Intercept", covariate))%>%
+      pull(taxa_name)
+)
+glance_significant_models(corn_da_sqmac) %>%
+      filter(t_value < -3 | t_value > 3) %>%
+      filter(fdr < 0.1 & std_error < 0.3) %>%
+      filter(!grepl("Intercept", covariate)) %>%
+      filter(taxa_name %in% mutual_taxa_total) 
+coabund_phylo <- subset_samples(psP, group %in% c("hum", "mac"))
+coabund_phylo <- prune_taxa(mutual_taxa_total, coabund_phylo)
+
+abundance_matrix <- otu_table(coabund_phylo)
+abundance_matrix <- as.matrix(abundance_matrix)
+abundance_matrix <- t(abundance_matrix)  #taxa as columns
+
+cor_mat <- cor(abundance_matrix, method = "spearman")
+colnames(cor_mat) <- str_extract(colnames(cor_mat), "s__.*")
+rownames(cor_mat) <- str_extract(rownames(cor_mat), "s__.*")
+
+cor_mat[lower.tri(cor_mat)] <- NA  #upper triangle only
+cor_mat[lower.tri(cor_mat)] <- NA  #upper triangle only
+cor_df <- reshape2::melt(cor_mat, na.rm = TRUE)
+names(cor_df) <- c("Gene1", "Gene2", "correlation")
+##strong thresh for network
+edges <- cor_df %>% filter(abs(correlation) > 0.70)
+g <- graph_from_data_frame(edges, directed = FALSE)
+V(g)$degree <- igraph::degree(g)
+
+### detect louvain clustered modules; switching to infomap --
+## more robust for a smaller network; less coarse network results giving us more specific focused modularity
+### more robust than WGCNA which focuses on defining groups by co-expression (and also requires bit larger sample size/#input genes)
+comm <- cluster_louvain(g)
+
+V(g)$module <- factor(membership(comm))
+modules <- levels(V(g)$module)
+
+module_colors <- brewer.pal(length(modules), "Set3")
+names(module_colors) <- modules
+
+# Prepare node info
+node_info <- tibble(
+  name = V(g)$name,
+  module = V(g)$module,
+  degree = V(g)$degree
+)
+
+# Identify hubs per module
+top_hubs <- node_info %>%
+  group_by(module) %>%
+  filter(degree == max(degree)) %>%
+  pull(name)
+
+# Assign shapes: triangles for hubs, circles for others
+node_info <- node_info %>%
+  mutate(
+    shape_group = ifelse(name %in% top_hubs, 24, 21),  # 24=triangle, 21=circle
+    outline_color = ifelse(degree >= 60, "red", "black")  # red outline for degree ≥50
+  )
+
+# Match order
+node_info <- node_info[match(V(g)$name, node_info$name), ]
+
+# Assign to graph vertices
+V(g)$module <- factor(node_info$module, levels = modules)
+V(g)$shape_group <- node_info$shape_group
+V(g)$degree <- node_info$degree
+V(g)$name <- node_info$name
+V(g)$outline_color <- node_info$outline_color
+
+# Plot
+library(grid)  # for custom legend key grobs
+ggraph(g, layout = "stress") +
+  geom_edge_link(aes(edge_alpha = abs(correlation)), color = "grey70", show.legend = FALSE) +
+geom_node_point(aes(size = degree, fill = module, shape = factor(shape_group), color = outline_color),
+                stroke = 1.5,
+                show.legend = c(fill = TRUE, shape = FALSE, size = FALSE, color = FALSE)) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3.5) +
+  scale_fill_manual(
+    values = module_colors,
+    name = "Module",
+    guide = guide_legend(
+      override.aes = list(shape = 21)  # legend keys are circles, colored by module
+    )
+  ) +
+  scale_shape_manual(
+    values = c(`21` = 21, `24` = 24),
+    guide = "none"  # hide shape legend
+  ) +
+  scale_color_identity() +  # use outline colors literally, no legend
+  theme_void() +
+  labs(title = "Human-Macaque Donor Gene Correlation Network:",
+       subtitle = "Louvain module, Hub Triangles and High-Degree Centrality (>=30) Highlighted nodes (red)")
+
+
+
+
+
+
+
+```
+
+
+squirrel monkey v macaque
+```{r }
+
+set.seed(123)
+
+mutual_taxa_total <-
+  intersect(
+    glance_significant_models(corn_da_sqmac) %>%
+      filter(t_value < -3 | t_value > 3) %>%
+      filter(fdr < 0.1 & std_error < 0.3) %>%
+      filter(!grepl("Intercept", covariate)) %>%
+      pull(taxa_name),
+
+    glance_significant_models(corn_da_humac) %>%
+      filter(t_value < -3 | t_value > 3) %>%
+      filter(fdr < 0.1 & std_error < 0.3) %>%
+      filter(!grepl("Intercept", covariate))%>%
+      pull(taxa_name)
+)
+coabund_phylo <- subset_samples(psP, group %in% c("sqm", "mac"))
+coabund_phylo <- prune_taxa(mutual_taxa_total, coabund_phylo)
+
+abundance_matrix <- otu_table(coabund_phylo)
+abundance_matrix <- as.matrix(abundance_matrix)
+abundance_matrix <- t(abundance_matrix)  # taxa as columns
+
+cor_mat <- cor(abundance_matrix, method = "spearman")
+colnames(cor_mat) <- str_extract(colnames(cor_mat), "s__.*")
+rownames(cor_mat) <- str_extract(rownames(cor_mat), "s__.*")
+
+cor_mat[lower.tri(cor_mat)] <- NA  # upper triangle only
+cor_mat[lower.tri(cor_mat)] <- NA  # upper triangle only
+cor_df <- reshape2::melt(cor_mat, na.rm = TRUE)
+names(cor_df) <- c("Gene1", "Gene2", "correlation")
+##strong thresh for network
+edges <- cor_df %>% filter(abs(correlation) > 0.70)
+g <- graph_from_data_frame(edges, directed = FALSE)
+V(g)$degree <- igraph::degree(g)
+
+### detect louvain clustered modules; switching to infomap --
+## more robust for a smaller network; less coarse network results giving us more specific focused modularity
+### more robust than WGCNA which focuses on defining groups by co-expression (and also requires bit larger sample size/#input genes)
+comm <- cluster_louvain(g)
+
+V(g)$module <- factor(membership(comm))
+modules <- levels(V(g)$module)
+
+module_colors <- brewer.pal(length(modules), "Set3")
+names(module_colors) <- modules
+
+# Prepare node info
+node_info <- tibble(
+  name = V(g)$name,
+  module = V(g)$module,
+  degree = V(g)$degree
+)
+
+# Identify hubs per module
+top_hubs <- node_info %>%
+  group_by(module) %>%
+  filter(degree == max(degree)) %>%
+  pull(name)
+
+# Assign shapes: triangles for hubs, circles for others
+node_info <- node_info %>%
+  mutate(
+    shape_group = ifelse(name %in% top_hubs, 24, 21),  # 24=triangle, 21=circle
+    outline_color = ifelse(degree >= 60, "red", "black")  # red outline for degree ≥50
+  )
+
+# Match order
+node_info <- node_info[match(V(g)$name, node_info$name), ]
+
+# Assign to graph vertices
+V(g)$module <- factor(node_info$module, levels = modules)
+V(g)$shape_group <- node_info$shape_group
+V(g)$degree <- node_info$degree
+V(g)$name <- node_info$name
+V(g)$outline_color <- node_info$outline_color
+
+# Plot
+library(grid)  # for custom legend key grobs
+ggraph(g, layout = "stress") +
+  geom_edge_link(aes(edge_alpha = abs(correlation)), color = "grey70", show.legend = FALSE) +
+geom_node_point(aes(size = degree, fill = module, shape = factor(shape_group), color = outline_color),
+                stroke = 1.5,
+                show.legend = c(fill = TRUE, shape = FALSE, size = FALSE, color = FALSE)) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3.5) +
+  scale_fill_manual(
+    values = module_colors,
+    name = "Module",
+    guide = guide_legend(
+      override.aes = list(shape = 21)  # legend keys are circles, colored by module
+    )
+  ) +
+  scale_shape_manual(
+    values = c(`21` = 21, `24` = 24),
+    guide = "none"  # hide shape legend
+  ) +
+  scale_color_identity() +  # use outline colors literally, no legend
+  theme_void() +
+  labs(title = "Squirrel Monkey-Macaque Donor Gene Correlation Network:",
+       subtitle = "Louvain module, Hub Triangles and High-Degree Centrality (>=30) Highlighted nodes (red)")
+
+
+abund_df <- ps_melt(coabund_phylo) %>%
+  group_by(OTU, group) %>%
+  summarize(mean_abund = mean(Abundance), .groups = "drop") %>%
+  mutate(log2_abund = log2(mean_abund + 1e-6))  # avoid log(0)
+abund_df$OTU <- str_extract(abund_df$OTU, "s__.*")
+
+abund_wide <- abund_df %>%
+  pivot_wider(names_from = group, values_from = log2_abund, values_fill = 0)
+
+V(g)$log2abund_sqm <- abund_wide$sqm[match(V(g)$name, abund_wide$OTU)]
+V(g)$log2abund_mac <- abund_wide$mac[match(V(g)$name, abund_wide$OTU)]
+
+abund_wide <- abund_wide %>%
+  mutate(mac_minus_sqm = mac - sqm)
+
+V(g)$log2fc_mac_sqm <- abund_wide$mac_minus_sqm[match(V(g)$name, abund_wide$OTU)]
+
+ggraph(g, layout = "stress") +
+  geom_edge_link(alpha = 0.2) +
+  geom_node_point(aes(color = log2fc_mac_sqm), size = 4) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+  scale_color_gradient2(
+    low = "blue", mid = "white", high = "red", midpoint = 0,
+    name = "log2(Abundance)\nMacaque - Sqm"
+  ) + 
+  theme_graph()
+
+
+
+```
+
+
+
+
+## taxonomic BOXplots
+Not sure it's worth using these given the taxonomic barplots, but can slap error bars and p-val thresholds on if it makes more sense to use them in the end...
+
+```{r, contains boxplots for a few taxa of interest (slides 25-37) }
+
+############### MIGHT END UP BEING SUPPL. BOX PLOTS FOR CHAPTER/PAPER 1;
+############### THESE ARE ALREADY ON SLIDE DECK
+library(ggplot2)
+library(ggpubr)
+
+#add theme 
+
+theme_bold <- theme(
+  axis.title.x = element_text(size = 22, face = "bold"),
+  axis.title.y = element_text(size = 22,face = "bold"),
+  axis.text.x = element_text(face = "bold", size = 22),
+  axis.text.y = element_text(size = 22,face = "bold"),
+  legend.title = element_text(size = 18,face = "bold"),
+  legend.text = element_text(size = 22,face = "bold"),
+  plot.title = element_text(size = 18,face = "bold"),
+  strip.text = element_text(size = 22,face = "bold"),
+  axis.line = element_line(size = 3, color = "black"),
+)
+
+# given data integration results (network projection)
+pdata <- phyloseq::psmelt(psP)
+my_comparisons <- list( c("mac", "sqm"), c("hum", "mac"), c("sqm", "hum") )
+
+#####Clostridia (Class-lvl)######
+ ggboxplot(filter(pdata, Class == "c__Clostridia"),
+          x = "group", y = "Abundance",
+          color = "group", order = c("hum", "mac", "sqm"))+ 
+  scale_y_continuous(trans="log10")+
+  stat_compare_means(aes(group,Freq),comparisons = my_comparisons, method = "wilcox.test") + 
+  ggtitle("Clostridia") +
+  scale_color_manual(values = colorRampPalette(brewer.pal(8, "Dark2"))(3)) +
+  theme(legend.position="none") + ylab("Relative Abundance (log10)") + xlab("Donor Group")
+#####Lachnospirales (Order-lvl)######
+ ggboxplot(filter(pdata, Order == "o__Lachnospirales"),
+          x = "group", y = "Abundance",
+          color = "group", order = c("hum", "mac", "sqm"))+ 
+  scale_y_continuous(trans="log10")+
+  stat_compare_means(aes(group,Freq),comparisons = my_comparisons, method = "wilcox.test") + 
+  ggtitle("Lachnospirales") +
+  scale_color_manual(values = colorRampPalette(brewer.pal(8, "Dark2"))(3)) +
+  theme(legend.position="none") + ylab("Relative Abundance (log10)") + xlab("Donor Group")
+#####Lachnospiraceae (Family-lvl)######
+ ggboxplot(filter(pdata, Family == "f__Lachnospiraceae"),
+          x = "group", y = "Abundance",
+          color = "group", order = c("hum", "mac", "sqm"))+ 
+  scale_y_continuous(trans="log10")+
+  stat_compare_means(aes(group,Freq),comparisons = my_comparisons, method = "wilcox.test") + 
+  ggtitle("Lachnospiraceae") +
+  scale_color_manual(values = colorRampPalette(brewer.pal(8, "Dark2"))(3)) +
+  theme(legend.position="none") + ylab("log10(Rel. Abundance)") + xlab("Donor Group")
+
+
+
+
+
+
+#####Genus Level######
+genvec <- c("g__Lachnoclostridium","g__Enterocloster")
+for( x in genvec){
+  ggboxplot(filter(pdata, Genus == x),
+          x = "group", y = "Abundance",
+          color = "group", order = c("hum", "mac", "sqm"))+ 
+  scale_y_continuous(trans="log10")+
+  stat_compare_means(aes(group,Freq),comparisons = my_comparisons, method = "wilcox.test") + 
+  ggtitle(paste0("", x)) +
+  scale_color_manual(values = colorRampPalette(brewer.pal(8, "Dark2"))(3)) +
+  theme(legend.position="none") + ylab("log10(Rel. Abundance)") + xlab("Donor Group")
+}
+
+
+#####Species Level######
+specvec <- c("s__[Clostridium]_hylemonae","s__[Clostridium]_scindens","s__[Clostridium]_symbiosum",
+              "s__[Clostridium]_innocuum","s__Clostridioides_difficile","s__Butyrivibrio_crossotus",
+             "s__Lachnospira_eligens","s__Simiaoa_sunii","s__Agathobacter_rectalis","s__Enterocloster_bolteae","s__Clostridium_perfringens", "s__Peptacetobacter_hiranonis" )
+
+for (x in specvec) {
+  # Clean species name for display and file naming
+  clean_label <- x %>%
+    stringr::str_replace("^s__", "") %>%
+    stringr::str_replace_all("_", " ")
+
+  # Create plot
+  p <- ggboxplot(filter(pdata, Species == x),
+          x = "group", y = "Abundance", size = 2,
+          color = "group", order = c("hum", "mac", "sqm")) +
+    scale_y_continuous(trans = "log10") +
+    stat_compare_means(aes(group, Freq), comparisons = my_comparisons, method = "wilcox.test", size = 4.3, bracket.size = 2, font=list(face = "bold", step.increase = .1)) +
+    ggtitle(paste0(" ", clean_label)) +
+    scale_color_manual(values = colorRampPalette(brewer.pal(8, "Dark2"))(3)) +
+    theme(legend.position = "none") + 
+    theme_bold + theme(
+    aspect.ratio = 1/2,
+    legend.position = "none",
+    axis.ticks.x = element_line(size = 3, color = "black")) + 
+    theme_bold  +
+  theme(
+    aspect.ratio = 1/2,
+    legend.position = "none",
+    axis.text.x = element_text(face = "bold", size = 22),
+    axis.title.x = element_text(size = 22, face = "bold"),
+    axis.ticks.x = element_line(size = 3, color = "black")) +
+    ylab("log10(Rel. Abundance)") +
+    xlab("Donor Group")
+
+  print(p)
+
+  # Save with cleaned filename
+  ggsave(filename = paste0("boxplot_S1C_", clean_label, ".tiff"), plot = p,
+         width = 8, height = 4.5, dpi = 300)
+}
+#################### Bacteroides heparinolyticus
+ggboxplot(filter(pdata, Species == "s__Clostridioides_difficile"),
+          x = "group", y = "Abundance",
+          color = "group", order = c("hum", "mac", "sqm"))+ 
+  scale_y_continuous(trans="log10")+
+  stat_compare_means(aes(group,Freq),comparisons = my_comparisons, method = "wilcox.test") + 
+  ggtitle("Bacteroides_heparinolyticus,
+          a **famously** bile-sensitive taxon") +
+  scale_color_manual(values = colorRampPalette(brewer.pal(8, "Dark2"))(3)) +
+  theme(legend.position="none") + ylab("log10(Rel. Abundance)") + xlab("Donor Group")
+
+############### Some extras... don't necessarily need them, but could be useful in context. we'll see the writeup
+
+# filter(pdata, Species == "s__Phocaeicola_vulgatus") %>%
+# ggplot(data = ., aes(x = group, y = Abundance)) +
+#   geom_boxplot(outlier.shape  = NA) +
+#   geom_jitter(aes(color = group), height = 0, width = .2) +
+#   ggtitle("Bacteroides boxplots")
+
+# filter(pdata, Genus == "g__Bacteroides") %>% filter(group == "mac"| group == "hum") %>%
+# ggplot(data = ., aes(x = group, y = Abundance)) +
+#   geom_boxplot(outlier.shape  = NA) +
+#   geom_jitter(aes(color = group), height = 0, width = .2) +
+#   ggtitle("Lactobacillus plots")
+# 
+# filter(pdata, Genus == "g__Bifidobacterium") %>%
+# ggplot(data = ., aes(x = group, y = log(Abundance))) +
+#   geom_boxplot(outlier.shape  = NA) +
+#   geom_jitter(aes(color = group), height = 0, width = .2) +
+#   ggtitle("Bifido boxplots")
+# 
+# filter(pdata, Species == "s__Parabacteroides_goldsteinii") %>%
+# ggplot(data = ., aes(x = group, y = log(Abundance))) +
+#   geom_boxplot(outlier.shape  = NA) +
+#   geom_jitter(aes(color = group), height = 0, width = .2) +
+#   ggtitle("Bifido boxplots")
+
+
+```
+
+
+
+
